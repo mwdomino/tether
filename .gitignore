@@ -1,5 +1,7 @@
 dist/
 /tether
 /tether.exe
+/tether_*.tar.gz
+/tether_*.zip
 *.test
 *.out
