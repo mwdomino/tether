@@ -123,19 +123,25 @@ func TestAgentLoopbackEndToEnd(t *testing.T) {
 	desktopPort := tmp.Addr().(*net.TCPAddr).Port
 	tmp.Close()
 
+	// Shorten the host's tunnel grace period so the test isn't bound to the
+	// 60-second production default.
+	prevGrace := host.TunnelGracePeriod
+	host.TunnelGracePeriod = 500 * time.Millisecond
+	defer func() { host.TunnelGracePeriod = prevGrace }()
+
 	network, addr := startHost(t, mockBrowserCmd(mark))
 
 	// Run agent in a goroutine; it will block on tunnel relay until callback completes.
 	url := "https://idp/auth?redirect_uri=http://localhost:" + itoaT(desktopPort) + "/cb"
 	errCh := make(chan error, 1)
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 14*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		errCh <- Run(ctx, Config{
 			Network: network,
 			Addr:    addr,
 			URL:     url,
-			Timeout: 13 * time.Second,
+			Timeout: 5 * time.Second,
 			// Override: dial the SSO tool on its actual port, not desktopPort.
 			LoopbackDialer: func(_ int) (net.Conn, error) {
 				return net.Dial("tcp", "127.0.0.1:"+itoaT(ssoPort))
@@ -164,14 +170,13 @@ func TestAgentLoopbackEndToEnd(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	// Agent should exit cleanly after grace period (10s in prod, but we can
-	// just wait for the agent to return — the host releases after grace).
+	// Agent should exit cleanly after the (shortened) grace period elapses.
 	select {
 	case err := <-errCh:
 		if err != nil {
 			t.Fatalf("agent: %v", err)
 		}
-	case <-time.After(15 * time.Second):
+	case <-time.After(4 * time.Second):
 		t.Fatal("agent did not exit in time")
 	}
 	_ = mark

@@ -14,7 +14,11 @@ import (
 	"github.com/mwdomino/tether/internal/proto"
 )
 
-const tunnelGracePeriod = 10 * time.Second
+// TunnelGracePeriod is the idle window after the last tunnel connection
+// closes before the desktop-side listener is torn down. Exported as a var
+// (not a const) so cross-package tests can shorten it. Production callers
+// should not modify it.
+var TunnelGracePeriod = 60 * time.Second
 
 // tunnelMgr binds desktop loopback ports and opens substreams back to the
 // agent for each incoming connection.
@@ -98,8 +102,11 @@ func (tl *tunnelListener) acceptLoop() {
 		if err != nil {
 			return
 		}
-		tl.disarmGrace()
+		// Bump active BEFORE disarmGrace so a racing timer that grabs the mutex
+		// first observes active>0 and re-arms instead of tearing the listener
+		// down with an in-flight connection.
 		atomic.AddInt32(&tl.active, 1)
+		tl.disarmGrace()
 		go tl.handleConn(c)
 	}
 }
@@ -130,11 +137,6 @@ func (tl *tunnelListener) handleConn(c net.Conn) {
 	<-done
 }
 
-// Note: there is a narrow race between Accept() returning and disarmGrace()
-// running where the grace timer may fire and tear down the listener, causing
-// follow-on requests (favicons, IdP "you can close this tab" pages) to fail
-// with connection-refused. The initial OAuth callback still completes
-// because the connection is already accepted. Tracked for v1.1.
 func (tl *tunnelListener) armGrace() {
 	tl.parent.mu.Lock()
 	defer tl.parent.mu.Unlock()
@@ -144,7 +146,7 @@ func (tl *tunnelListener) armGrace() {
 	if tl.timer != nil {
 		tl.timer.Stop()
 	}
-	tl.timer = time.AfterFunc(tunnelGracePeriod, func() {
+	tl.timer = time.AfterFunc(TunnelGracePeriod, func() {
 		tl.parent.removeListener(tl.port)
 	})
 }
@@ -162,6 +164,16 @@ func (m *tunnelMgr) removeListener(port int) {
 	m.mu.Lock()
 	tl, ok := m.listeners[port]
 	if !ok {
+		m.mu.Unlock()
+		return
+	}
+	// If a connection is in flight (acceptLoop bumped active before disarmGrace
+	// raced this timer), re-arm grace and bail. handleConn's defer will call
+	// armGrace once active drops back to zero.
+	if atomic.LoadInt32(&tl.active) > 0 {
+		tl.timer = time.AfterFunc(TunnelGracePeriod, func() {
+			tl.parent.removeListener(tl.port)
+		})
 		m.mu.Unlock()
 		return
 	}

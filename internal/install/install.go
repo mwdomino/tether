@@ -12,7 +12,34 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 )
+
+// Options controls optional flags baked into the installed unit's ExecStart.
+// Leave fields empty to use the host's built-in defaults.
+type Options struct {
+	// Listen is a TCP host:port (e.g., "127.0.0.1:9999"). Mutually exclusive
+	// with Socket.
+	Listen string
+	// Socket is a unix socket path. Mutually exclusive with Listen.
+	Socket string
+	// AuthToken, if set, is passed as --auth-token to the host.
+	AuthToken string
+}
+
+func (o Options) extraArgs() []string {
+	var a []string
+	if o.Listen != "" {
+		a = append(a, "--listen", o.Listen)
+	}
+	if o.Socket != "" {
+		a = append(a, "--socket", o.Socket)
+	}
+	if o.AuthToken != "" {
+		a = append(a, "--auth-token", o.AuthToken)
+	}
+	return a
+}
 
 // unitPathOverride lets tests redirect the unit path. Empty in production.
 var unitPathOverride string
@@ -45,7 +72,12 @@ func UnitPath() (string, error) {
 
 // Install writes the service file for the host daemon and starts it.
 // binaryPath is the absolute path to the tether binary the unit will invoke.
-func Install(binaryPath string) error {
+// opts.Listen / opts.Socket / opts.AuthToken, when set, are appended to the
+// unit's ExecStart line.
+func Install(binaryPath string, opts Options) error {
+	if opts.Listen != "" && opts.Socket != "" {
+		return errors.New("install: --listen and --socket are mutually exclusive")
+	}
 	path, err := UnitPath()
 	if err != nil {
 		return err
@@ -53,11 +85,11 @@ func Install(binaryPath string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", filepath.Dir(path), err)
 	}
-	body := renderUnitFor(runtime.GOOS, binaryPath)
+	body := renderUnitFor(runtime.GOOS, binaryPath, opts.extraArgs())
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		return fmt.Errorf("write %s: %w", path, err)
 	}
-	return enable(path, binaryPath)
+	return enable(path, binaryPath, opts.extraArgs())
 }
 
 // Uninstall stops and removes the service file. Missing file is not an error.
@@ -76,25 +108,36 @@ func Uninstall() error {
 // renderUnit is a convenience wrapper for the current OS; tests use it for
 // quick rendering without going through Install.
 func renderUnit(binaryPath string) string {
-	return renderUnitFor(runtime.GOOS, binaryPath)
+	return renderUnitFor(runtime.GOOS, binaryPath, nil)
 }
 
-func renderUnitFor(goos, binaryPath string) string {
+func renderUnitFor(goos, binaryPath string, extraArgs []string) string {
 	switch goos {
 	case "linux":
+		execStart := binaryPath + " host"
+		if len(extraArgs) > 0 {
+			execStart += " " + strings.Join(extraArgs, " ")
+		}
 		return fmt.Sprintf(`[Unit]
 Description=Tether host daemon (remote browser opener)
 After=default.target
 
 [Service]
-ExecStart=%s host
+ExecStart=%s
 Restart=on-failure
 RestartSec=2
 
 [Install]
 WantedBy=default.target
-`, binaryPath)
+`, execStart)
 	case "darwin":
+		argStrings := []string{
+			fmt.Sprintf("        <string>%s</string>", binaryPath),
+			"        <string>host</string>",
+		}
+		for _, a := range extraArgs {
+			argStrings = append(argStrings, fmt.Sprintf("        <string>%s</string>", a))
+		}
 		return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -103,8 +146,7 @@ WantedBy=default.target
     <string>com.tether.host</string>
     <key>ProgramArguments</key>
     <array>
-        <string>%s</string>
-        <string>host</string>
+%s
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -112,17 +154,21 @@ WantedBy=default.target
     <true/>
 </dict>
 </plist>
-`, binaryPath)
+`, strings.Join(argStrings, "\n"))
 	case "windows":
+		cmdLine := fmt.Sprintf(`"%s" host`, binaryPath)
+		if len(extraArgs) > 0 {
+			cmdLine += " " + strings.Join(extraArgs, " ")
+		}
 		return fmt.Sprintf(`@echo off
-start "" "%s" host
-`, binaryPath)
+start "" %s
+`, cmdLine)
 	default:
 		return ""
 	}
 }
 
-func enable(unitPath, binaryPath string) error {
+func enable(unitPath, binaryPath string, extraArgs []string) error {
 	switch runtime.GOOS {
 	case "linux":
 		if err := run("systemctl", "--user", "daemon-reload"); err != nil {
@@ -138,7 +184,8 @@ func enable(unitPath, binaryPath string) error {
 		return nil
 	case "windows":
 		// Launch the host immediately so the user does not need to log out and back in.
-		return runDetached("cmd", "/c", "start", "", binaryPath, "host")
+		args := append([]string{"/c", "start", "", binaryPath, "host"}, extraArgs...)
+		return runDetached("cmd", args...)
 	default:
 		return fmt.Errorf("install: unsupported OS %q", runtime.GOOS)
 	}
