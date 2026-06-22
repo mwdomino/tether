@@ -65,6 +65,7 @@ func defaultSocketPath() string {
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
+		fmt.Fprintln(os.Stderr, "tether: XDG_RUNTIME_DIR unset and home directory lookup failed; falling back to /tmp/tether.sock")
 		return "/tmp/tether.sock"
 	}
 	dir := filepath.Join(home, ".local", "share", "tether")

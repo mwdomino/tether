@@ -124,6 +124,7 @@ func (h *Host) handleConn(ctx context.Context, conn net.Conn) {
 	}
 
 	if h.cfg.AuthToken != "" && req.AuthToken != h.cfg.AuthToken {
+		h.log.Warn("auth token mismatch", "remote", conn.RemoteAddr())
 		_ = proto.WriteFrame(control, proto.Response{OK: false, Error: "auth token mismatch"})
 		return
 	}
