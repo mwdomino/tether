@@ -1,0 +1,5 @@
+dist/
+/tether
+/tether.exe
+*.test
+*.out
