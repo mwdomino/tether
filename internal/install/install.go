@@ -163,7 +163,7 @@ func disable(unitPath string) error {
 
 func postUninstall() error {
 	if runtime.GOOS == "linux" {
-		return run("systemctl", "--user", "daemon-reload")
+		_ = run("systemctl", "--user", "daemon-reload")
 	}
 	return nil
 }
