@@ -64,25 +64,68 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	defer session.Close()
 
-	control, err := session.OpenStream()
-	if err != nil {
-		return fmt.Errorf("open control stream: %w", err)
-	}
-
 	req := proto.Request{
 		URL:           cfg.URL,
 		LoopbackPorts: proto.ExtractLoopbackPorts(cfg.URL),
 		AuthToken:     cfg.AuthToken,
 	}
+
+	// If we may need to accept tunnel substreams, start the accept goroutine BEFORE
+	// the control round-trip. The host may open a substream as soon as the browser
+	// hits the desktop-bound loopback port, which can happen before the agent reads
+	// the OK response.
+	var (
+		doneCh    chan struct{}
+		streams   chan *yamux.Stream
+		acceptErr chan error
+	)
+	if len(req.LoopbackPorts) > 0 {
+		doneCh = make(chan struct{})
+		streams = make(chan *yamux.Stream)
+		acceptErr = make(chan error, 1)
+		go func() {
+			for {
+				s, err := session.AcceptStream()
+				if err != nil {
+					acceptErr <- err
+					return
+				}
+				select {
+				case streams <- s:
+				case <-doneCh:
+					_ = s.Close()
+					return
+				}
+			}
+		}()
+	}
+
+	control, err := session.OpenStream()
+	if err != nil {
+		if doneCh != nil {
+			close(doneCh)
+		}
+		return fmt.Errorf("open control stream: %w", err)
+	}
+
 	if err := proto.WriteFrame(control, req); err != nil {
+		if doneCh != nil {
+			close(doneCh)
+		}
 		return fmt.Errorf("write request: %w", err)
 	}
 
 	var resp proto.Response
 	if err := proto.ReadFrame(control, &resp); err != nil {
+		if doneCh != nil {
+			close(doneCh)
+		}
 		return fmt.Errorf("read response: %w", err)
 	}
 	if !resp.OK {
+		if doneCh != nil {
+			close(doneCh)
+		}
 		return classifyHostError(resp.Error)
 	}
 
@@ -90,29 +133,17 @@ func Run(ctx context.Context, cfg Config) error {
 		return nil
 	}
 
-	// Tunnel mode: accept substreams until control closes or timeout.
-	return runTunnelLoop(ctx, cfg, session, control)
+	return runTunnelLoop(ctx, cfg, control, doneCh, streams, acceptErr)
 }
 
-func runTunnelLoop(ctx context.Context, cfg Config, session *yamux.Session, control *yamux.Stream) error {
+func runTunnelLoop(ctx context.Context, cfg Config, control *yamux.Stream, doneCh chan struct{}, streams chan *yamux.Stream, acceptErr chan error) error {
+	defer close(doneCh)
+
 	// Goroutine: watch control for EOF (host released all listeners).
 	controlClosed := make(chan struct{})
 	go func() {
 		_, _ = io.Copy(io.Discard, control)
 		close(controlClosed)
-	}()
-
-	streams := make(chan *yamux.Stream)
-	acceptErr := make(chan error, 1)
-	go func() {
-		for {
-			s, err := session.AcceptStream()
-			if err != nil {
-				acceptErr <- err
-				return
-			}
-			streams <- s
-		}
 	}()
 
 	for {

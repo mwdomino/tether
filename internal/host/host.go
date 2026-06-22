@@ -124,6 +124,7 @@ func (h *Host) handleConn(ctx context.Context, conn net.Conn) {
 	}
 
 	if h.cfg.AuthToken != "" && req.AuthToken != h.cfg.AuthToken {
+		h.log.Warn("auth token mismatch", "remote", conn.RemoteAddr())
 		_ = proto.WriteFrame(control, proto.Response{OK: false, Error: "auth token mismatch"})
 		return
 	}
@@ -169,7 +170,10 @@ func (h *Host) launchBrowser(url string) error {
 	argv := append([]string{}, h.cfg.Browser...)
 	argv = append(argv, url)
 	cmd := exec.Command(argv[0], argv[1:]...)
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	return cmd.Start()
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	// Reap the child so it doesn't linger as a zombie in our long-lived daemon.
+	go func() { _ = cmd.Wait() }()
+	return nil
 }

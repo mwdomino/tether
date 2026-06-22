@@ -130,6 +130,11 @@ func (tl *tunnelListener) handleConn(c net.Conn) {
 	<-done
 }
 
+// Note: there is a narrow race between Accept() returning and disarmGrace()
+// running where the grace timer may fire and tear down the listener, causing
+// follow-on requests (favicons, IdP "you can close this tab" pages) to fail
+// with connection-refused. The initial OAuth callback still completes
+// because the connection is already accepted. Tracked for v1.1.
 func (tl *tunnelListener) armGrace() {
 	tl.parent.mu.Lock()
 	defer tl.parent.mu.Unlock()
