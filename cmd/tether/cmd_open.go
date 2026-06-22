@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"runtime"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -72,9 +71,6 @@ func resolveTarget(server, socket string) (network, addr string) {
 	if socket != "" {
 		return "unix", socket
 	}
-	// On Windows, unix sockets through SSH RemoteForward are not standard;
-	// always prefer TCP unless an explicit socket is given.
-	_ = runtime.GOOS
 	return "tcp", server
 }
 
