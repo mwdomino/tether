@@ -140,18 +140,41 @@ func (tl *tunnelListener) handleConn(c net.Conn) {
 	}
 
 	upN, downN := int64(0), int64(0)
-	done := make(chan struct{}, 2)
+	upDone := make(chan struct{})
+	downDone := make(chan struct{})
 	go func() {
 		n, _ := io.Copy(stream, c)
 		upN = n
-		done <- struct{}{}
+		close(upDone)
 	}()
 	go func() {
 		n, _ := io.Copy(c, stream)
 		downN = n
-		done <- struct{}{}
+		close(downDone)
 	}()
-	<-done
+
+	// Wait for either direction to finish. The first finisher does NOT close
+	// the connections — we give the other side a bounded window to drain.
+	// Without this, when the browser closes its conn (Firefox times out a
+	// stalled localhost response at ~5s), we'd otherwise tear the yamux
+	// substream down and cut the agent's read from AWS CLI mid-response.
+	select {
+	case <-upDone:
+		// Browser→agent done. Give agent→browser up to 30s to deliver the
+		// response, then force-close.
+		select {
+		case <-downDone:
+		case <-time.After(30 * time.Second):
+		}
+	case <-downDone:
+		// Agent→browser done. The response has been delivered (or AWS CLI
+		// closed). Browser may still hold a keep-alive read, but the OAuth
+		// flow is complete; give the other direction a few seconds and bail.
+		select {
+		case <-upDone:
+		case <-time.After(3 * time.Second):
+		}
+	}
 	tl.parent.log.Info("tunnel: pipe ended", "port", tl.port, "bytes_to_agent", upN, "bytes_from_agent", downN)
 }
 

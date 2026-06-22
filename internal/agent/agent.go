@@ -194,18 +194,35 @@ func handleTunnel(cfg Config, s *yamux.Stream) {
 	defer local.Close()
 
 	upN, downN := int64(0), int64(0)
-	done := make(chan struct{}, 2)
+	upDone := make(chan struct{})
+	downDone := make(chan struct{})
 	go func() {
 		n, _ := io.Copy(local, s)
 		upN = n
-		done <- struct{}{}
+		close(upDone)
 	}()
 	go func() {
 		n, _ := io.Copy(s, local)
 		downN = n
-		done <- struct{}{}
+		close(downDone)
 	}()
-	<-done
+
+	// Mirror the host's pattern: if the desktop→agent direction finishes
+	// first (browser closed before AWS CLI responded), give AWS CLI a window
+	// to write its response back. Without this, the deferred local.Close()
+	// would cut AWS CLI off mid-response.
+	select {
+	case <-upDone:
+		select {
+		case <-downDone:
+		case <-time.After(30 * time.Second):
+		}
+	case <-downDone:
+		select {
+		case <-upDone:
+		case <-time.After(3 * time.Second):
+		}
+	}
 	cfg.Logger.Info("agent: tunnel pipe ended",
 		"port", hdr.Port, "bytes_from_desktop", upN, "bytes_from_local", downN)
 }
