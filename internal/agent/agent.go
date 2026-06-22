@@ -40,7 +40,12 @@ func Run(ctx context.Context, cfg Config) error {
 		cfg.Logger = slog.Default()
 	}
 	if cfg.Timeout <= 0 {
-		cfg.Timeout = 5 * time.Minute
+		// 15 minutes — generous headroom for slow OAuth callbacks. AWS CLI's
+		// token-exchange step in particular can take several minutes when
+		// the headless box reaches AWS endpoints over a slow/proxied path,
+		// and a too-short timeout tears the pipe down right when the local
+		// CLI is about to write its response.
+		cfg.Timeout = 15 * time.Minute
 	}
 	if cfg.LoopbackDialer == nil {
 		cfg.LoopbackDialer = func(port int) (net.Conn, error) {

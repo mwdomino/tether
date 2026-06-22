@@ -49,7 +49,7 @@ func newOpenCmd() *cobra.Command {
 				fmt.Fprintln(os.Stderr, "tether: auth token mismatch")
 				os.Exit(4)
 			case errors.Is(err, agent.ErrTimeout):
-				fmt.Fprintln(os.Stderr, "tether: timed out waiting for callback")
+				fmt.Fprintf(os.Stderr, "tether: timed out waiting for callback after %s — try increasing --timeout (or set TETHER_TIMEOUT) if the upstream OAuth flow is slow\n", timeout)
 				os.Exit(5)
 			case errors.Is(err, agent.ErrBrowserLaunch):
 				fmt.Fprintln(os.Stderr, "tether:", err)
@@ -63,7 +63,7 @@ func newOpenCmd() *cobra.Command {
 	c.Flags().StringVar(&server, "server", envOr("TETHER_SERVER", "127.0.0.1:9999"), "host TCP address")
 	c.Flags().StringVar(&socket, "socket", os.Getenv("TETHER_SOCKET"), "host unix socket path (overrides --server)")
 	c.Flags().StringVar(&authToken, "auth-token", os.Getenv("TETHER_AUTH_TOKEN"), "shared secret (if host requires)")
-	c.Flags().DurationVar(&timeout, "timeout", 5*time.Minute, "overall timeout including loopback wait")
+	c.Flags().DurationVar(&timeout, "timeout", envDurationOr("TETHER_TIMEOUT", 15*time.Minute), "overall timeout including loopback wait")
 	return c
 }
 
@@ -77,6 +77,15 @@ func resolveTarget(server, socket string) (network, addr string) {
 func envOr(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return def
+}
+
+func envDurationOr(key string, def time.Duration) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
 	}
 	return def
 }
