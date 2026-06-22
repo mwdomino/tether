@@ -44,7 +44,13 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	if cfg.LoopbackDialer == nil {
 		cfg.LoopbackDialer = func(port int) (net.Conn, error) {
-			return net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+			// Try IPv4 first, then IPv6 — some Python apps (e.g. AWS CLI's
+			// SSO listener) bind only to ::1 when `localhost` resolves to
+			// ::1 first in /etc/hosts.
+			if c, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port)); err == nil {
+				return c, nil
+			}
+			return net.Dial("tcp", fmt.Sprintf("[::1]:%d", port))
 		}
 	}
 
@@ -69,6 +75,9 @@ func Run(ctx context.Context, cfg Config) error {
 		LoopbackPorts: proto.ExtractLoopbackPorts(cfg.URL),
 		AuthToken:     cfg.AuthToken,
 	}
+	cfg.Logger.Info("agent: connected to host",
+		"target", cfg.Network+" "+cfg.Addr,
+		"loopback_ports", req.LoopbackPorts)
 
 	// If we may need to accept tunnel substreams, start the accept goroutine BEFORE
 	// the control round-trip. The host may open a substream as soon as the browser
@@ -128,11 +137,14 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 		return classifyHostError(resp.Error)
 	}
+	cfg.Logger.Info("agent: host accepted request; browser launched on desktop")
 
 	if len(req.LoopbackPorts) == 0 {
+		cfg.Logger.Info("agent: no loopback ports; exiting")
 		return nil
 	}
 
+	cfg.Logger.Info("agent: awaiting tunnel substreams from host", "ports", req.LoopbackPorts)
 	return runTunnelLoop(ctx, cfg, control, doneCh, streams, acceptErr)
 }
 
@@ -164,24 +176,38 @@ func handleTunnel(cfg Config, s *yamux.Stream) {
 	defer s.Close()
 	var hdr proto.TunnelHeader
 	if err := proto.ReadFrame(s, &hdr); err != nil {
-		cfg.Logger.Error("tunnel header read", "err", err)
+		cfg.Logger.Error("agent: tunnel header read", "err", err)
 		return
 	}
 	if hdr.Kind != "tunnel" {
-		cfg.Logger.Error("unexpected stream kind", "kind", hdr.Kind)
+		cfg.Logger.Error("agent: unexpected stream kind", "kind", hdr.Kind)
 		return
 	}
+	cfg.Logger.Info("agent: tunnel substream received; dialing local", "port", hdr.Port)
 	local, err := cfg.LoopbackDialer(hdr.Port)
 	if err != nil {
-		cfg.Logger.Error("dial loopback", "port", hdr.Port, "err", err)
+		cfg.Logger.Error("agent: dial loopback failed (is the tool still listening on 127.0.0.1 / ::1 ?)",
+			"port", hdr.Port, "err", err)
 		return
 	}
+	cfg.Logger.Info("agent: local dial succeeded; piping bytes", "port", hdr.Port, "local", local.RemoteAddr())
 	defer local.Close()
 
+	upN, downN := int64(0), int64(0)
 	done := make(chan struct{}, 2)
-	go func() { _, _ = io.Copy(local, s); done <- struct{}{} }()
-	go func() { _, _ = io.Copy(s, local); done <- struct{}{} }()
+	go func() {
+		n, _ := io.Copy(local, s)
+		upN = n
+		done <- struct{}{}
+	}()
+	go func() {
+		n, _ := io.Copy(s, local)
+		downN = n
+		done <- struct{}{}
+	}()
 	<-done
+	cfg.Logger.Info("agent: tunnel pipe ended",
+		"port", hdr.Port, "bytes_from_desktop", upN, "bytes_from_local", downN)
 }
 
 func classifyHostError(msg string) error {

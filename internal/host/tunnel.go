@@ -125,22 +125,34 @@ func (tl *tunnelListener) handleConn(c net.Conn) {
 		}
 	}()
 
+	tl.parent.log.Info("tunnel: browser connected", "port", tl.port, "remote", c.RemoteAddr())
+
 	stream, err := tl.parent.session.OpenStream()
 	if err != nil {
-		tl.parent.log.Error("open tunnel stream", "err", err)
+		tl.parent.log.Error("tunnel: open substream", "port", tl.port, "err", err)
 		return
 	}
 	defer stream.Close()
 
 	if err := proto.WriteFrame(stream, proto.TunnelHeader{Kind: "tunnel", Port: tl.port}); err != nil {
-		tl.parent.log.Error("write tunnel header", "err", err)
+		tl.parent.log.Error("tunnel: write header", "port", tl.port, "err", err)
 		return
 	}
 
+	upN, downN := int64(0), int64(0)
 	done := make(chan struct{}, 2)
-	go func() { _, _ = io.Copy(stream, c); done <- struct{}{} }()
-	go func() { _, _ = io.Copy(c, stream); done <- struct{}{} }()
+	go func() {
+		n, _ := io.Copy(stream, c)
+		upN = n
+		done <- struct{}{}
+	}()
+	go func() {
+		n, _ := io.Copy(c, stream)
+		downN = n
+		done <- struct{}{}
+	}()
 	<-done
+	tl.parent.log.Info("tunnel: pipe ended", "port", tl.port, "bytes_to_agent", upN, "bytes_from_agent", downN)
 }
 
 func (tl *tunnelListener) armGrace() {
