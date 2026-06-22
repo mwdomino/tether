@@ -62,8 +62,14 @@ func (m *tunnelMgr) bind(ports []int) (failedPort int, err error) {
 		m.listeners[p] = tl
 		m.mu.Unlock()
 		go tl.acceptLoop()
-		// Start the grace timer — if nothing connects, release after grace.
-		tl.armGrace()
+		// Do NOT arm the grace timer here. The grace period is a tail buffer
+		// for follow-on requests (favicons, IdP "you can close this tab" pages)
+		// AFTER the first callback completes — not a kill switch for the
+		// initial wait. Slow SSO flows (AWS SSO with MFA, etc.) routinely take
+		// longer than the grace period to send the user back to the redirect.
+		// Until the first connection arrives we rely on the agent's overall
+		// timeout (default 5min) and session-close detection to tear things
+		// down.
 	}
 	return 0, nil
 }
