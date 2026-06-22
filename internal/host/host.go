@@ -122,6 +122,7 @@ func (h *Host) handleConn(ctx context.Context, conn net.Conn) {
 		h.log.Error("read control request", "err", err)
 		return
 	}
+	h.log.Info("request received", "url", req.URL, "loopback_ports", req.LoopbackPorts)
 
 	if h.cfg.AuthToken != "" && req.AuthToken != h.cfg.AuthToken {
 		h.log.Warn("auth token mismatch", "remote", conn.RemoteAddr())
@@ -133,21 +134,25 @@ func (h *Host) handleConn(ctx context.Context, conn net.Conn) {
 	if len(req.LoopbackPorts) > 0 {
 		mgr = newTunnelMgr(session, h.log)
 		if failed, err := mgr.bind(req.LoopbackPorts); err != nil {
+			h.log.Error("bind loopback port", "port", failed, "err", err)
 			_ = proto.WriteFrame(control, proto.Response{
 				OK:    false,
 				Error: fmt.Sprintf("port %d already in use on desktop: %s", failed, err.Error()),
 			})
 			return
 		}
+		h.log.Info("loopback ports bound", "ports", req.LoopbackPorts)
 	}
 
 	if err := h.launchBrowser(req.URL); err != nil {
+		h.log.Error("browser launch", "err", err)
 		if mgr != nil {
 			mgr.releaseAll()
 		}
 		_ = proto.WriteFrame(control, proto.Response{OK: false, Error: "browser launch failed: " + err.Error()})
 		return
 	}
+	h.log.Info("browser launched")
 	if err := proto.WriteFrame(control, proto.Response{OK: true}); err != nil {
 		h.log.Error("write control response", "err", err)
 		if mgr != nil {
