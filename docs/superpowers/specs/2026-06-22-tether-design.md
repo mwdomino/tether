@@ -217,7 +217,7 @@ systemd/launchd/Event Viewer); agent writes to stderr.
 
 ## Build & release
 
-- Single Go module. Layout:
+- Single Go module (Go 1.26). Layout:
   - `cmd/tether/main.go` — entrypoint, wires cobra subcommands.
   - `internal/host/` — host daemon implementation.
   - `internal/agent/` — agent implementation.
