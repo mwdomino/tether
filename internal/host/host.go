@@ -124,22 +124,45 @@ func (h *Host) handleConn(ctx context.Context, conn net.Conn) {
 	}
 
 	if h.cfg.AuthToken != "" && req.AuthToken != h.cfg.AuthToken {
-		h.log.Warn("auth token mismatch", "remote", conn.RemoteAddr())
 		_ = proto.WriteFrame(control, proto.Response{OK: false, Error: "auth token mismatch"})
 		return
 	}
 
-	// v1 step: ignore LoopbackPorts. URL-only path.
+	var mgr *tunnelMgr
+	if len(req.LoopbackPorts) > 0 {
+		mgr = newTunnelMgr(session, h.log)
+		if failed, err := mgr.bind(req.LoopbackPorts); err != nil {
+			_ = proto.WriteFrame(control, proto.Response{
+				OK:    false,
+				Error: fmt.Sprintf("port %d already in use on desktop: %s", failed, err.Error()),
+			})
+			return
+		}
+	}
+
 	if err := h.launchBrowser(req.URL); err != nil {
+		if mgr != nil {
+			mgr.releaseAll()
+		}
 		_ = proto.WriteFrame(control, proto.Response{OK: false, Error: "browser launch failed: " + err.Error()})
 		return
 	}
 	if err := proto.WriteFrame(control, proto.Response{OK: true}); err != nil {
 		h.log.Error("write control response", "err", err)
+		if mgr != nil {
+			mgr.releaseAll()
+		}
 		return
 	}
-	// No loopback ports → drain to EOF so client can close cleanly.
-	_, _ = io.Copy(io.Discard, control)
+
+	if mgr == nil {
+		// No loopback ports → drain to EOF so client closes cleanly.
+		_, _ = io.Copy(io.Discard, control)
+		return
+	}
+
+	mgr.wait(ctx)
+	// Closing control here signals the agent we're done.
 }
 
 func (h *Host) launchBrowser(url string) error {
