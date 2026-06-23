@@ -119,9 +119,21 @@ Then in `~/.bashrc` / `~/.zshrc`:
 
 ```sh
 export BROWSER="$HOME/.local/bin/tether-open"
-# Optional: also intercept xdg-open
+```
+
+Also intercept `xdg-open`:
+
+```sh
 ln -sf "$HOME/.local/bin/tether-open" ~/.local/bin/xdg-open
 ```
+
+Setting `$BROWSER` covers tools that honor it (`aws`, `gh`, `gcloud`,
+Python's `webbrowser`, etc.). But several Go-based CLIs — notably
+`argocd`, some `kubectl` plugins, and various HashiCorp tools — use
+libraries like `github.com/pkg/browser` that ignore `$BROWSER` on Linux
+and shell out directly to `xdg-open`. The symlink above makes those work
+too. Make sure `~/.local/bin` is on your `PATH` ahead of any system
+`xdg-open` (from `xdg-utils`) so the shim wins.
 
 **Windows (PowerShell, less common as the headless side):**
 
