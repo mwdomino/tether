@@ -42,3 +42,26 @@ changelog:
     exclude:
       - "^chore:"
       - "^docs:"
+
+# Auto-publish Homebrew formula to mwdomino/homebrew-tap on every release.
+# Requires the release workflow's GITHUB_TOKEN to have write access to the
+# tap repo (use a PAT in HOMEBREW_TAP_GITHUB_TOKEN if the default token is
+# scoped to this repo only).
+brews:
+  - name: tether
+    repository:
+      owner: mwdomino
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: "https://github.com/mwdomino/tether"
+    description: "Open URLs requested on a headless server in a browser on your desktop, over SSH."
+    license: "MIT"
+    commit_author:
+      name: goreleaserbot
+      email: bot@goreleaser.com
+    directory: Formula
+    install: |
+      bin.install "tether"
+    test: |
+      system "#{bin}/tether", "--version"

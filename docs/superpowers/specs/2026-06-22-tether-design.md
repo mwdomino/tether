@@ -190,15 +190,56 @@ Env vars mirror the flags: `TETHER_SERVER`, `TETHER_SOCKET`,
 
 ### Install patterns (documented, not automated)
 
-On the headless box, the user picks one of:
+On the headless box, the user installs a small **backgrounding** shim and
+points `$BROWSER` (or symlinks `xdg-open`) at it. The shim must exit
+immediately so the calling tool's `webbrowser.open()` returns — otherwise
+tools that use Python's `webbrowser` module (notably AWS CLI's
+`aws sso login`) deadlock: `webbrowser.open_new_tab` calls `p.wait()` on
+`$BROWSER` and blocks the calling tool's main thread until that process
+exits, but the tether agent intentionally stays alive to relay the OAuth
+callback that the calling tool is waiting for.
 
-- `export BROWSER="$HOME/.local/bin/tether-open-shim"` where the shim
-  is a one-line script: `exec tether open "$@"`.
-- Symlink `~/.local/bin/xdg-open` → `tether-open-shim` and ensure
-  `~/.local/bin` precedes `/usr/bin` in `PATH`.
+**Linux / macOS (Bash):**
 
-Tether does not modify `/usr/local/bin/xdg-open` or any system path
-automatically.
+```bash
+#!/usr/bin/env bash
+mkdir -p "$HOME/.cache/tether"
+nohup tether open "$@" >>"$HOME/.cache/tether/open.log" 2>&1 &
+exit 0
+```
+
+Save as `~/.local/bin/tether-open`, `chmod +x`, then:
+
+```bash
+export BROWSER="$HOME/.local/bin/tether-open"
+# Optional: also handle xdg-open consumers
+ln -sf "$HOME/.local/bin/tether-open" ~/.local/bin/xdg-open
+```
+
+`nohup … &` detaches the agent from the terminal session and the calling
+tool's process group; stdout/stderr go to the log file so they don't
+pollute the calling tool's terminal. `exit 0` returns immediately so
+`webbrowser.open()` unblocks.
+
+**Windows (PowerShell):**
+
+```powershell
+# tether-open.ps1
+$logDir = "$env:LOCALAPPDATA\tether"
+New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+Start-Process -FilePath "tether" -ArgumentList (@("open") + $args) `
+    -WindowStyle Hidden `
+    -RedirectStandardOutput "$logDir\open.log" `
+    -RedirectStandardError "$logDir\open.err.log"
+exit 0
+```
+
+`Start-Process` without `-Wait` returns immediately and the agent runs
+detached. Point `BROWSER` at this script (or wrap as a `.cmd` that calls
+`powershell -ExecutionPolicy Bypass -File tether-open.ps1 %*`).
+
+Tether does not modify `/usr/local/bin/xdg-open` or any system PATH
+entries automatically.
 
 ## Error handling
 
