@@ -20,3 +20,8 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # PAT scoped to push the Homebrew formula commit to
+          # mwdomino/homebrew-tap. Create at github.com/settings/tokens,
+          # grant repo:contents:write on the tap repo, and add as a repo
+          # secret here named HOMEBREW_TAP_GITHUB_TOKEN.
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
