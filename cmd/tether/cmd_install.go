@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
-	"path/filepath"
+	"runtime"
 
 	"github.com/spf13/cobra"
 
@@ -16,15 +16,7 @@ func newInstallCmd() *cobra.Command {
 		Use:   "install",
 		Short: "Install the host daemon as a per-user service that starts on login.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			exe, err := os.Executable()
-			if err != nil {
-				return fmt.Errorf("locate current binary: %w", err)
-			}
-			resolved, err := filepath.EvalSymlinks(exe)
-			if err != nil {
-				resolved = exe
-			}
-			abs, err := filepath.Abs(resolved)
+			abs, err := currentExecutable()
 			if err != nil {
 				return err
 			}
@@ -33,6 +25,8 @@ func newInstallCmd() *cobra.Command {
 			}
 			path, _ := install.UnitPath()
 			fmt.Fprintf(os.Stderr, "tether: installed and started (%s)\n", path)
+			fmt.Fprintln(os.Stderr, "tether: add this to ~/.ssh/config on this browser box:")
+			fmt.Fprintf(os.Stderr, "  RemoteForward 9999 %s\n", remoteForwardTarget(opts))
 			return nil
 		},
 	}
@@ -40,4 +34,17 @@ func newInstallCmd() *cobra.Command {
 	c.Flags().StringVar(&opts.Socket, "socket", "", "Unix socket path for the host daemon to listen on. Mutually exclusive with --listen.")
 	c.Flags().StringVar(&opts.AuthToken, "auth-token", "", "Optional shared secret the agent must present.")
 	return c
+}
+
+func remoteForwardTarget(opts install.Options) string {
+	if opts.Listen != "" {
+		return opts.Listen
+	}
+	if opts.Socket != "" {
+		return opts.Socket
+	}
+	if runtime.GOOS == "windows" {
+		return "127.0.0.1:9999"
+	}
+	return defaultSocketPath()
 }

@@ -30,7 +30,7 @@ type Config struct {
 	Logger *slog.Logger
 }
 
-// Host is the desktop-side daemon.
+// Host is the browser-box daemon.
 type Host struct {
 	cfg Config
 	log *slog.Logger
@@ -137,7 +137,7 @@ func (h *Host) handleConn(ctx context.Context, conn net.Conn) {
 			h.log.Error("bind loopback port", "port", failed, "err", err)
 			_ = proto.WriteFrame(control, proto.Response{
 				OK:    false,
-				Error: fmt.Sprintf("port %d already in use on desktop: %s", failed, err.Error()),
+				Error: fmt.Sprintf("port %d already in use on browser box: %s", failed, err.Error()),
 			})
 			return
 		}

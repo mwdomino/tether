@@ -1,39 +1,43 @@
 # tether
 
-Open URLs requested on a headless server in a browser on your desktop, over
-an existing SSH connection. Solves the OAuth/SSO localhost-callback problem
-that breaks tools like `aws sso login`, `gcloud auth login`, and
+Open URLs requested on a headless server in a browser on another machine, over
+an existing SSH connection. Tether solves the OAuth/SSO localhost-callback
+problem that breaks tools like `aws sso login`, `gcloud auth login`, and
 `gh auth login` when you run them on a remote box.
 
-## What it does
+## Two-Machine Model
 
-`tether host` runs on the desktop machine you're sitting at. It listens on a
-unix socket (Linux/macOS) or `127.0.0.1:9999` (Windows), exposed to your
-headless server via an SSH `RemoteForward`.
+Tether always has two sides:
 
-`tether open <url>` runs on the headless server, invoked as `$BROWSER` by
-whatever tool wants to pop a tab. It connects to the host through the SSH
-forward, tells the host to open the URL, and — crucially — tunnels any
-OAuth `localhost:PORT` callbacks back to the headless side so the
-originating tool's local listener can receive them.
+- **Browser box:** the laptop, desktop, or workstation with a browser
+  installed. This side runs `tether host`.
+- **Headless box:** the remote server, VM, or container host where CLIs run.
+  This side uses a `tether-open` shim as `$BROWSER`, which starts
+  `tether open <url>` in the background.
 
-```
-[ Mac / Win ]                              [ Linux headless box ]
-                                                   $BROWSER
-   browser   <─tunnel(SSO callback)──>  tether open <url>
-      ▲                                          │
-      │                                          │
-   tether host  <───── SSH RemoteForward ────────┘
+The browser box exposes its local `tether host` listener to the headless box
+with an SSH `RemoteForward`. When an OAuth flow redirects to `localhost:PORT`,
+the browser-box callback is tunneled back to the tool still running on the
+headless box.
+
+```text
+[ browser box ]                              [ headless box ]
+                                                  $BROWSER
+   browser   <--- tunnel(SSO callback) -->  tether open <url>
+      ^                                          |
+      |                                          |
+   tether host  <------ SSH RemoteForward -------+
 ```
 
 ## Install
+
+Install the `tether` binary on both machines.
 
 ### Via Homebrew (macOS + Linuxbrew)
 
 The repo ships a `Brewfile` you can use with `brew bundle`:
 
 ```sh
-# from the repo root, or anywhere you've copied the Brewfile
 brew bundle --file=./Brewfile
 ```
 
@@ -57,8 +61,8 @@ Requires Go 1.26+.
 ### From a release archive
 
 Grab the tarball/zip for your platform from the
-[releases page](https://github.com/mwdomino/tether/releases),
-extract, and put `tether` somewhere on `PATH`:
+[releases page](https://github.com/mwdomino/tether/releases), extract it, and
+put `tether` somewhere on `PATH`:
 
 ```sh
 curl -fsSL https://github.com/mwdomino/tether/releases/latest/download/tether_<VERSION>_linux_amd64.tar.gz | \
@@ -68,117 +72,115 @@ sudo install -m 0755 tether /usr/local/bin/tether
 
 ## Setup
 
-### 1. Desktop (Mac / Linux / Windows): install the host service
+### 1. Browser box: install the host service
+
+Run this on the machine with the browser:
 
 ```sh
 tether install
 ```
 
-Drops a per-user service unit (systemd user / launchd LaunchAgent / Windows
-Startup folder) and starts the daemon. No root/admin required.
+This writes a per-user service unit (systemd user / launchd LaunchAgent /
+Windows Startup folder) and starts `tether host`. No root/admin required.
+It also prints the `RemoteForward` line to add to SSH config.
 
-To use a non-default address:
+To use a non-default host address:
 
 ```sh
 tether install --listen 127.0.0.1:7777   # TCP
 tether install --socket /custom/path     # unix socket (Linux/macOS)
 ```
 
-### 2. Desktop: add a `RemoteForward` to your SSH config
+### 2. Browser box: add the SSH RemoteForward
 
-In `~/.ssh/config` on the desktop:
+In `~/.ssh/config` on the browser box, add the `RemoteForward` printed by
+`tether install` under the headless box you SSH into:
 
-```
+```sshconfig
 Host headless-box
   HostName 1.2.3.4
   User you
   RemoteForward 9999 /Users/<you>/.local/share/tether/tether.sock
 ```
 
-On Windows desktops replace the socket path with `127.0.0.1:9999`.
+On Linux/macOS browser boxes, the right side is the `tether host` Unix socket.
+If `$XDG_RUNTIME_DIR` is set, the default is usually
+`$XDG_RUNTIME_DIR/tether.sock`; otherwise it is
+`~/.local/share/tether/tether.sock`. On Windows browser boxes, `tether install`
+prints a TCP target:
 
-### 3. Headless box: install the agent shim
-
-The agent must be backgrounded by the shim so calling tools (e.g. Python's
-`webbrowser.open_new_tab`) don't block waiting for it to exit — see
-[Why the backgrounding shim is required](#why-the-backgrounding-shim-is-required).
-
-**Linux / macOS:**
-
-```bash
-cat > ~/.local/bin/tether-open <<'EOF'
-#!/usr/bin/env bash
-mkdir -p "$HOME/.cache/tether"
-nohup tether open "$@" >>"$HOME/.cache/tether/open.log" 2>&1 &
-exit 0
-EOF
-chmod +x ~/.local/bin/tether-open
+```sshconfig
+Host headless-box
+  HostName 1.2.3.4
+  User you
+  RemoteForward 9999 127.0.0.1:9999
 ```
 
-Then in `~/.bashrc` / `~/.zshrc`:
+Reconnect to the headless box after changing SSH config so the forward is
+active in that SSH session.
+
+### 3. Headless box: install the browser shim
+
+Run this on the headless box:
 
 ```sh
-export BROWSER="$HOME/.local/bin/tether-open"
+tether install-shim
 ```
 
-Also intercept `xdg-open`:
+`tether install-shim` is idempotent. It writes `~/.local/bin/tether-open`,
+creates the log directory, and on Linux also installs `~/.local/bin/xdg-open`
+as a shim when that path is free or already points at `tether-open`.
+
+Configure the current shell:
 
 ```sh
-ln -sf "$HOME/.local/bin/tether-open" ~/.local/bin/xdg-open
+eval "$(tether source)"
+```
+
+Then add the same exports to your shell profile. To print them without
+installing anything:
+
+```sh
+tether source
+```
+
+`tether source` prints shell code like:
+
+```sh
+export PATH='/home/you/.local/bin':"$PATH"
+export BROWSER='/home/you/.local/bin/tether-open'
 ```
 
 Setting `$BROWSER` covers tools that honor it (`aws`, `gh`, `gcloud`,
-Python's `webbrowser`, etc.). But several Go-based CLIs — notably
-`argocd`, some `kubectl` plugins, and various HashiCorp tools — use
-libraries like `github.com/pkg/browser` that ignore `$BROWSER` on Linux
-and shell out directly to `xdg-open`. The symlink above makes those work
-too. Make sure `~/.local/bin` is on your `PATH` ahead of any system
-`xdg-open` (from `xdg-utils`) so the shim wins.
+Python's `webbrowser`, etc.). Some Go-based CLIs, notably `argocd`, some
+`kubectl` plugins, and various HashiCorp tools, ignore `$BROWSER` on Linux
+and shell out directly to `xdg-open`. The `xdg-open` shim makes those work
+too. Make sure `~/.local/bin` is on `PATH` ahead of any system `xdg-open`.
 
-**Windows (PowerShell, less common as the headless side):**
+If `~/.local/bin/xdg-open` already exists and is not tether's shim,
+`install-shim` leaves it alone. Use `--xdg-open=false` to skip it or
+`--force-xdg-open` to replace it.
 
-```powershell
-# %USERPROFILE%\AppData\Local\tether\tether-open.ps1
-$logDir = "$env:LOCALAPPDATA\tether"
-New-Item -ItemType Directory -Force -Path $logDir | Out-Null
-Start-Process -FilePath "tether" -ArgumentList (@("open") + $args) `
-    -WindowStyle Hidden `
-    -RedirectStandardOutput "$logDir\open.log" `
-    -RedirectStandardError "$logDir\open.err.log"
-exit 0
-```
+## Why the Shim Backgrounds `tether open`
 
-Point `BROWSER` at this script (or wrap as a `.cmd` that calls
-`powershell -ExecutionPolicy Bypass -File tether-open.ps1 %*`).
+When a tool like AWS CLI calls Python's `webbrowser.open_new_tab(url)`, the
+module launches `$BROWSER` and then calls `p.wait()` on the subprocess. If
+`$BROWSER` is `tether open` directly, the agent stays alive holding the SSH
+tunnel open to relay the OAuth callback, but `p.wait()` does not return until
+the agent exits. The calling tool's main thread is blocked and never reaches
+its own HTTP listener to accept the callback.
 
-## Why the backgrounding shim is required
-
-When a tool like AWS CLI calls Python's `webbrowser.open_new_tab(url)`,
-the module launches `$BROWSER` and then calls `p.wait()` on the
-subprocess. If `$BROWSER` is `tether open` directly, the agent stays
-alive holding the SSH tunnel open to relay the OAuth callback — but
-`p.wait()` doesn't return until the agent exits, so the calling tool's
-main thread is blocked and never reaches its own HTTP listener to accept
-the callback. **Deadlock.**
-
-`nohup … &` (or PowerShell's `Start-Process`) detaches the agent so the
-shim returns `0` immediately. The agent runs in the background, relays
-the callback, and exits naturally when the OAuth flow completes (or
-after `--timeout`, default 5 minutes; override per invocation with
-`tether open --timeout 10m …`).
+The shim detaches the agent so it returns `0` immediately. The agent runs in
+the background, relays the callback, and exits naturally when the OAuth flow
+completes, or after `--timeout` (default 5 minutes).
 
 ## Customization
 
-### Agent flags (set on the headless side, e.g. inside the shim)
+### Host flags (browser box)
 
-| Flag | Env | Default | What |
-|---|---|---|---|
-| `--server` | `TETHER_SERVER` | `127.0.0.1:9999` | TCP target |
-| `--socket` | `TETHER_SOCKET` | unset | Unix socket target (overrides `--server`) |
-| `--auth-token` | `TETHER_AUTH_TOKEN` | unset | Shared secret if host requires |
-| `--timeout` | — | `5m` | Overall wait time |
-
-### Host flags (set at `tether install` time)
+Set these on the browser box. `tether install` persists `--listen`,
+`--socket`, and `--auth-token` into the service unit; `--browser` is available
+when running `tether host` directly.
 
 | Flag | Default | What |
 |---|---|---|
@@ -186,6 +188,26 @@ after `--timeout`, default 5 minutes; override per invocation with
 | `--socket` | `$XDG_RUNTIME_DIR/tether.sock` (Linux/macOS) | Unix socket path |
 | `--browser` | OS default | Custom open command |
 | `--auth-token` | unset | Require this token from agents |
+
+### Agent flags (headless box)
+
+Set these on the headless box, for example inside the shim:
+
+| Flag | Env | Default | What |
+|---|---|---|---|
+| `--server` | `TETHER_SERVER` | `127.0.0.1:9999` | TCP target exposed by SSH |
+| `--socket` | `TETHER_SOCKET` | unset | Unix socket target (overrides `--server`) |
+| `--auth-token` | `TETHER_AUTH_TOKEN` | unset | Shared secret if host requires |
+| `--timeout` | `TETHER_TIMEOUT` | `5m` | Overall wait time |
+
+### Shim flags (headless box)
+
+| Flag | Default | What |
+|---|---|---|
+| `--bin-dir` | `~/.local/bin` | Where `tether-open` is written |
+| `--log-dir` | `~/.cache/tether` | Where shim logs are written |
+| `--xdg-open` | `true` on Linux | Also install `xdg-open` in `--bin-dir` |
+| `--force-xdg-open` | `false` | Replace an existing `--bin-dir/xdg-open` |
 
 ## Debugging
 
@@ -201,24 +223,22 @@ log stream --predicate 'process == "tether"' --info
 # Linux
 journalctl --user -u tether-host -f
 
-# Windows: Event Viewer → Windows Logs → Application
+# Windows: Event Viewer -> Windows Logs -> Application
 ```
 
 Common failure modes:
 
-- `failed to connect to host on … — is RemoteForward set up?` — the SSH
-  forward isn't active in your current session. Reconnect with `ssh -v`
-  to verify.
-- `port <N> already in use on desktop` — another OAuth flow is mid-auth,
-  or you have a real service on that port on your desktop.
-- Browser shows "still waiting on 127.0.0.1" indefinitely — check
+- `failed to connect to host on ... is RemoteForward set up?` means the SSH
+  forward is not active in your current session. Reconnect with `ssh -v` to
+  verify.
+- `port <N> already in use on browser box` means another OAuth flow is mid-auth,
+  or a real service is already using that port on the browser box.
+- Browser shows "still waiting on 127.0.0.1" indefinitely: check
   `tail -f ~/.cache/tether/open.log` for `tunnel substream received`,
-  `local dial succeeded`, and `tunnel pipe ended` lines.
-  `bytes_from_local: 0` means the local tool received the callback but
-  didn't respond — usually a problem with that tool, not tether (verify
-  by hitting the local port with `curl` directly).
+  `local dial succeeded`, and `tunnel pipe ended` lines. `bytes_from_local: 0`
+  means the local tool received the callback but did not respond.
 
-## Building from source
+## Building from Source
 
 ```sh
 git clone https://github.com/mwdomino/tether
@@ -228,8 +248,8 @@ go test ./...
 ```
 
 Releases are cut by tagging `v*`; goreleaser produces archives for
-`linux/{amd64,arm64}`, `darwin/{amd64,arm64}`, `windows/{amd64,arm64}`
-and publishes the Homebrew formula to `mwdomino/homebrew-tap`.
+`linux/{amd64,arm64}`, `darwin/{amd64,arm64}`, `windows/{amd64,arm64}` and
+publishes the Homebrew formula to `mwdomino/homebrew-tap`.
 
 ## License
 

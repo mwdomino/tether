@@ -15,22 +15,24 @@ import (
 
 func startHost(t *testing.T, browserArgv []string) (network, addr string) {
 	t.Helper()
-	dir := t.TempDir()
 	cfg := host.Config{Browser: browserArgv}
-	if runtime.GOOS == "windows" {
-		cfg.Network, cfg.Addr = "tcp", "127.0.0.1:0"
-	} else {
-		cfg.Network, cfg.Addr = "unix", filepath.Join(dir, "tether.sock")
-	}
+	cfg.Network, cfg.Addr = "tcp", "127.0.0.1:0"
 	h, err := host.New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go func() { _ = h.Serve(ctx) }()
+	errCh := make(chan error, 1)
+	go func() { errCh <- h.Serve(ctx) }()
 	deadline := time.Now().Add(2 * time.Second)
 	for h.Addr() == nil {
+		select {
+		case err := <-errCh:
+			skipIfSocketDenied(t, err)
+			t.Fatalf("host failed to start: %v", err)
+		default:
+		}
 		if time.Now().After(deadline) {
 			t.Fatal("host did not start")
 		}
@@ -79,11 +81,7 @@ func TestAgentOpenNoLoopback(t *testing.T) {
 func TestAgentHostUnreachable(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	// Bind a port then immediately close to get a guaranteed unused one.
-	ln, _ := net.Listen("tcp", "127.0.0.1:0")
-	a := ln.Addr().String()
-	ln.Close()
-	err := Run(ctx, Config{Network: "tcp", Addr: a, URL: "https://example.com/"})
+	err := Run(ctx, Config{Network: "tcp", Addr: "127.0.0.1:1", URL: "https://example.com/"})
 	if err != ErrHostUnreachable {
 		t.Fatalf("expected ErrHostUnreachable, got %v", err)
 	}
@@ -102,6 +100,7 @@ func TestAgentLoopbackEndToEnd(t *testing.T) {
 
 	// SSO tool target on the headless side.
 	ssoLn, err := net.Listen("tcp", "127.0.0.1:0")
+	skipIfSocketDenied(t, err)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +118,11 @@ func TestAgentLoopbackEndToEnd(t *testing.T) {
 	ssoPort := ssoLn.Addr().(*net.TCPAddr).Port
 
 	// Pick a free desktop-side port the host should bind.
-	tmp, _ := net.Listen("tcp", "127.0.0.1:0")
+	tmp, err := net.Listen("tcp", "127.0.0.1:0")
+	skipIfSocketDenied(t, err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	desktopPort := tmp.Addr().(*net.TCPAddr).Port
 	tmp.Close()
 
@@ -195,4 +198,11 @@ func itoaT(n int) string {
 		n /= 10
 	}
 	return string(buf[i:])
+}
+
+func skipIfSocketDenied(t *testing.T, err error) {
+	t.Helper()
+	if err != nil && strings.Contains(err.Error(), "operation not permitted") {
+		t.Skipf("socket creation is not permitted in this environment: %v", err)
+	}
 }

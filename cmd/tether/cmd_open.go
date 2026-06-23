@@ -21,7 +21,7 @@ func newOpenCmd() *cobra.Command {
 	)
 	c := &cobra.Command{
 		Use:   "open <url>",
-		Short: "Send a URL to the desktop host to be opened in a browser.",
+		Short: "Send a URL to the browser-box host to be opened in a browser.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			network, addr := resolveTarget(server, socket)
@@ -63,7 +63,7 @@ func newOpenCmd() *cobra.Command {
 	c.Flags().StringVar(&server, "server", envOr("TETHER_SERVER", "127.0.0.1:9999"), "host TCP address")
 	c.Flags().StringVar(&socket, "socket", os.Getenv("TETHER_SOCKET"), "host unix socket path (overrides --server)")
 	c.Flags().StringVar(&authToken, "auth-token", os.Getenv("TETHER_AUTH_TOKEN"), "shared secret (if host requires)")
-	c.Flags().DurationVar(&timeout, "timeout", 5*time.Minute, "overall timeout including loopback wait")
+	c.Flags().DurationVar(&timeout, "timeout", envDurationOr("TETHER_TIMEOUT", 5*time.Minute), "overall timeout including loopback wait")
 	return c
 }
 
@@ -79,4 +79,16 @@ func envOr(key, def string) string {
 		return v
 	}
 	return def
+}
+
+func envDurationOr(key string, def time.Duration) time.Duration {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return def
+	}
+	return d
 }
