@@ -13,12 +13,12 @@ var Version = "dev"
 func main() {
 	root := &cobra.Command{
 		Use:           "tether",
-		Short:         "Open URLs requested on a headless server in a browser on your desktop.",
+		Short:         "Open URLs requested on a headless server in a browser on another machine.",
 		Version:       Version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
-	root.AddCommand(newHostCmd(), newOpenCmd(), newInstallCmd(), newUninstallCmd())
+	root.AddCommand(newHostCmd(), newOpenCmd(), newInstallCmd(), newInstallShimCmd(), newSourceCmd(), newUninstallCmd())
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "tether:", err)

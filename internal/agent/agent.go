@@ -16,7 +16,7 @@ import (
 
 var (
 	ErrHostUnreachable = errors.New("tether: host unreachable")
-	ErrPortCollision   = errors.New("tether: desktop port already in use")
+	ErrPortCollision   = errors.New("tether: browser-box port already in use")
 	ErrAuthMismatch    = errors.New("tether: auth token mismatch")
 	ErrTimeout         = errors.New("tether: timeout waiting for callback")
 	ErrBrowserLaunch   = errors.New("tether: browser launch failed")
@@ -81,7 +81,7 @@ func Run(ctx context.Context, cfg Config) error {
 
 	// If we may need to accept tunnel substreams, start the accept goroutine BEFORE
 	// the control round-trip. The host may open a substream as soon as the browser
-	// hits the desktop-bound loopback port, which can happen before the agent reads
+	// hits the browser-box loopback port, which can happen before the agent reads
 	// the OK response.
 	var (
 		doneCh    chan struct{}
@@ -137,7 +137,7 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 		return classifyHostError(resp.Error)
 	}
-	cfg.Logger.Info("agent: host accepted request; browser launched on desktop")
+	cfg.Logger.Info("agent: host accepted request; browser launched on browser box")
 
 	if len(req.LoopbackPorts) == 0 {
 		cfg.Logger.Info("agent: no loopback ports; exiting")
@@ -207,7 +207,7 @@ func handleTunnel(cfg Config, s *yamux.Stream) {
 		close(downDone)
 	}()
 
-	// Mirror the host's pattern: if the desktop→agent direction finishes
+	// Mirror the host's pattern: if the browser-box to agent direction finishes
 	// first (browser closed before AWS CLI responded), give AWS CLI a window
 	// to write its response back. Without this, the deferred local.Close()
 	// would cut AWS CLI off mid-response.

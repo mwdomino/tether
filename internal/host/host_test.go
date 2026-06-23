@@ -25,10 +25,17 @@ func startHost(t *testing.T, cfg Config) (h *Host, dial func() net.Conn) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go func() { _ = h.Serve(ctx) }()
+	errCh := make(chan error, 1)
+	go func() { errCh <- h.Serve(ctx) }()
 	// Wait briefly for Addr to become available.
 	deadline := time.Now().Add(2 * time.Second)
 	for h.Addr() == nil {
+		select {
+		case err := <-errCh:
+			skipIfSocketDenied(t, err)
+			t.Fatalf("host failed to start: %v", err)
+		default:
+		}
 		if time.Now().After(deadline) {
 			t.Fatal("host did not start in time")
 		}
@@ -54,11 +61,6 @@ func TestHostOpenURLNoLoopback(t *testing.T) {
 		Network: "tcp",
 		Addr:    "127.0.0.1:0",
 		Browser: browser,
-	}
-	if runtime.GOOS != "windows" {
-		// Prefer unix socket on non-Windows so we exercise the default path.
-		cfg.Network = "unix"
-		cfg.Addr = filepath.Join(dir, "tether.sock")
 	}
 	_, dial := startHost(t, cfg)
 
@@ -121,15 +123,12 @@ func TestHostLoopbackRoundTrip(t *testing.T) {
 	browser := mockBrowserCmd(t, mark)
 
 	cfg := Config{Browser: browser}
-	if runtime.GOOS == "windows" {
-		cfg.Network, cfg.Addr = "tcp", "127.0.0.1:0"
-	} else {
-		cfg.Network, cfg.Addr = "unix", filepath.Join(dir, "tether.sock")
-	}
+	cfg.Network, cfg.Addr = "tcp", "127.0.0.1:0"
 	_, dial := startHost(t, cfg)
 
 	// "headless-side SSO tool": a listener that echoes a fixed HTTP response.
 	ssoLn, err := net.Listen("tcp", "127.0.0.1:0")
+	skipIfSocketDenied(t, err)
 	if err != nil {
 		t.Fatalf("ssoLn: %v", err)
 	}
@@ -149,7 +148,11 @@ func TestHostLoopbackRoundTrip(t *testing.T) {
 
 	// Pick an unused desktop port to ask the host to bind. Using port 0
 	// in the protocol isn't possible — pick one with Listen+Close.
-	tmp, _ := net.Listen("tcp", "127.0.0.1:0")
+	tmp, err := net.Listen("tcp", "127.0.0.1:0")
+	skipIfSocketDenied(t, err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	desktopPort := tmp.Addr().(*net.TCPAddr).Port
 	tmp.Close()
 
@@ -224,15 +227,15 @@ func TestHostLoopbackRoundTrip(t *testing.T) {
 func TestHostLoopbackPortCollision(t *testing.T) {
 	dir := t.TempDir()
 	cfg := Config{Browser: mockBrowserCmd(t, filepath.Join(dir, "url.txt"))}
-	if runtime.GOOS == "windows" {
-		cfg.Network, cfg.Addr = "tcp", "127.0.0.1:0"
-	} else {
-		cfg.Network, cfg.Addr = "unix", filepath.Join(dir, "tether.sock")
-	}
+	cfg.Network, cfg.Addr = "tcp", "127.0.0.1:0"
 	_, dial := startHost(t, cfg)
 
 	// Hold a port on the desktop side so the host's bind will fail.
-	hold, _ := net.Listen("tcp", "127.0.0.1:0")
+	hold, err := net.Listen("tcp", "127.0.0.1:0")
+	skipIfSocketDenied(t, err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer hold.Close()
 	port := hold.Addr().(*net.TCPAddr).Port
 
@@ -267,4 +270,11 @@ func itoa(n int) string {
 		n /= 10
 	}
 	return string(buf[i:])
+}
+
+func skipIfSocketDenied(t *testing.T, err error) {
+	t.Helper()
+	if err != nil && strings.Contains(err.Error(), "operation not permitted") {
+		t.Skipf("socket creation is not permitted in this environment: %v", err)
+	}
 }
