@@ -12,8 +12,10 @@ Tether always has two sides:
 - **Browser box:** the laptop, desktop, or workstation with a browser
   installed. This side runs `tether host`.
 - **Headless box:** the remote server, VM, or container host where CLIs run.
-  This side uses a `tether-open` shim as `$BROWSER`, which starts
-  `tether open <url>` in the background.
+  This side needs `$BROWSER` (and, on Linux, `xdg-open`) pointed at a shim that
+  starts `tether open <url>` in the background. You get that shim one of two
+  ways: wrap a single command with `tether run` (nothing installed), or install
+  a persistent shim with `tether install-shim`.
 
 The browser box exposes its local `tether host` listener to the headless box
 with an SSH `RemoteForward`. When an OAuth flow redirects to `localhost:PORT`,
@@ -119,9 +121,37 @@ Host headless-box
 Reconnect to the headless box after changing SSH config so the forward is
 active in that SSH session.
 
-### 3. Headless box: install the browser shim
+### 3. Headless box: get the browser shim
 
-Run this on the headless box:
+The headless box needs `$BROWSER` (and, on Linux, `xdg-open`) pointed at a shim
+that backgrounds `tether open`. Pick one of two options.
+
+#### Option A — Shimless: `tether run` (nothing installed)
+
+Wrap the command you want to authenticate:
+
+```sh
+tether run -- aws sso login
+```
+
+`tether run` creates the shim in a private temp directory, points `$BROWSER`
+(and `xdg-open` on Linux) at it for that command only, runs the command, and
+removes the temp directory when it exits. Nothing is left on the box, and it
+exits with the wrapped command's exit code. Separate tether's own flags from the
+wrapped command with `--`:
+
+```sh
+tether run --timeout 10m -- gh auth login
+tether run --server 127.0.0.1:9999 -- gcloud auth login
+```
+
+This is the simplest path and ideal for one-off logins or locked-down boxes. The
+host service and SSH `RemoteForward` (steps 1–2) still have to be set up on the
+browser box.
+
+#### Option B — Persistent shim: `install-shim` + `source`
+
+For daily use, install the shim once:
 
 ```sh
 tether install-shim
@@ -161,6 +191,10 @@ If `~/.local/bin/xdg-open` already exists and is not tether's shim,
 `install-shim` leaves it alone. Use `--xdg-open=false` to skip it or
 `--force-xdg-open` to replace it.
 
+Both options use the same backgrounding shim, so the behavior described in
+[Why the Shim Backgrounds `tether open`](#why-the-shim-backgrounds-tether-open)
+applies to either path.
+
 ## Why the Shim Backgrounds `tether open`
 
 When a tool like AWS CLI calls Python's `webbrowser.open_new_tab(url)`, the
@@ -199,6 +233,9 @@ Set these on the headless box, for example inside the shim:
 | `--socket` | `TETHER_SOCKET` | unset | Unix socket target (overrides `--server`) |
 | `--auth-token` | `TETHER_AUTH_TOKEN` | unset | Shared secret if host requires |
 | `--timeout` | `TETHER_TIMEOUT` | `5m` | Overall wait time |
+
+`tether run` accepts these same flags (place them before `--`) and forwards them
+to the backgrounded `tether open` invocations via the environment.
 
 ### Shim flags (headless box)
 
