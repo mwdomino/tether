@@ -19,7 +19,7 @@ func newRunCmd() *cobra.Command {
 		Use:   "run [flags] -- <command> [args...]",
 		Short: "Run a command with an ephemeral browser shim (no install required).",
 		Long: "Run wraps a command with a temporary $BROWSER (and, on Linux, xdg-open)\n" +
-			"shim, so OAuth/SSO logins on a headless box reach your browser box without\n" +
+			"shim, so OAuth/SSO logins on an agent reach your host without\n" +
 			"installing anything. The shim is removed when the command exits.\n\n" +
 			"Separate tether's flags from the wrapped command with --:\n" +
 			"  tether run -- aws sso login\n" +

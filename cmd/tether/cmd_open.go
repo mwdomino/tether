@@ -21,7 +21,7 @@ func newOpenCmd() *cobra.Command {
 	)
 	c := &cobra.Command{
 		Use:   "open <url>",
-		Short: "Send a URL to the browser-box host to be opened in a browser.",
+		Short: "Send a URL to the host to be opened in a browser.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			network, addr := resolveTarget(server, socket)

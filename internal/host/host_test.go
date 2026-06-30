@@ -51,6 +51,38 @@ func startHost(t *testing.T, cfg Config) (h *Host, dial func() net.Conn) {
 	}
 }
 
+func TestHostUnixSocketPathRefusesRegularFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix sockets are not used on Windows")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tether.sock")
+	if err := os.WriteFile(path, []byte("do not remove"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	h, err := New(Config{Network: "unix", Addr: path, Browser: mockBrowserCmd(t, filepath.Join(dir, "url.txt"))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	err = h.Serve(ctx)
+	if err == nil {
+		t.Fatal("expected Serve to reject regular file at unix socket path")
+	}
+	if !strings.Contains(err.Error(), "not a socket") {
+		t.Fatalf("expected not-a-socket error, got %v", err)
+	}
+	got, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatalf("regular file was removed: %v", readErr)
+	}
+	if string(got) != "do not remove" {
+		t.Fatalf("regular file contents changed: %q", string(got))
+	}
+}
+
 func TestHostOpenURLNoLoopback(t *testing.T) {
 	// Mock browser command: writes its last arg into a temp file.
 	dir := t.TempDir()
@@ -126,7 +158,7 @@ func TestHostLoopbackRoundTrip(t *testing.T) {
 	cfg.Network, cfg.Addr = "tcp", "127.0.0.1:0"
 	_, dial := startHost(t, cfg)
 
-	// "headless-side SSO tool": a listener that echoes a fixed HTTP response.
+	// "agent-side SSO tool": a listener that echoes a fixed HTTP response.
 	ssoLn, err := net.Listen("tcp", "127.0.0.1:0")
 	skipIfSocketDenied(t, err)
 	if err != nil {
@@ -146,14 +178,14 @@ func TestHostLoopbackRoundTrip(t *testing.T) {
 	}()
 	ssoPort := ssoLn.Addr().(*net.TCPAddr).Port
 
-	// Pick an unused desktop port to ask the host to bind. Using port 0
+	// Pick an unused host port to ask the host to bind. Using port 0
 	// in the protocol isn't possible — pick one with Listen+Close.
 	tmp, err := net.Listen("tcp", "127.0.0.1:0")
 	skipIfSocketDenied(t, err)
 	if err != nil {
 		t.Fatal(err)
 	}
-	desktopPort := tmp.Addr().(*net.TCPAddr).Port
+	hostPort := tmp.Addr().(*net.TCPAddr).Port
 	tmp.Close()
 
 	conn := dial()
@@ -164,8 +196,8 @@ func TestHostLoopbackRoundTrip(t *testing.T) {
 	}
 	control, _ := session.OpenStream()
 	if err := proto.WriteFrame(control, proto.Request{
-		URL:           "https://idp/auth?redirect_uri=http://localhost:" + itoa(desktopPort) + "/cb",
-		LoopbackPorts: []int{desktopPort},
+		URL:           "https://idp/auth?redirect_uri=http://localhost:" + itoa(hostPort) + "/cb",
+		LoopbackPorts: []int{hostPort},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +209,7 @@ func TestHostLoopbackRoundTrip(t *testing.T) {
 		t.Fatalf("host rejected request: %+v", resp)
 	}
 
-	// Accept the substream the host will open in response to a desktop
+	// Accept the substream the host will open in response to a host
 	// connection. The "agent" role runs in this test.
 	streamCh := make(chan *yamux.Stream, 1)
 	go func() {
@@ -185,13 +217,13 @@ func TestHostLoopbackRoundTrip(t *testing.T) {
 		streamCh <- s
 	}()
 
-	// Connect to the desktop-side bound port — emulates the browser hitting
+	// Connect to the host-side bound port — emulates the browser hitting
 	// the SSO callback URL.
-	desktopConn, err := net.Dial("tcp", "127.0.0.1:"+itoa(desktopPort))
+	hostConn, err := net.Dial("tcp", "127.0.0.1:"+itoa(hostPort))
 	if err != nil {
-		t.Fatalf("dial desktop port: %v", err)
+		t.Fatalf("dial host port: %v", err)
 	}
-	defer desktopConn.Close()
+	defer hostConn.Close()
 
 	s := <-streamCh
 	defer s.Close()
@@ -199,11 +231,11 @@ func TestHostLoopbackRoundTrip(t *testing.T) {
 	if err := proto.ReadFrame(s, &hdr); err != nil {
 		t.Fatal(err)
 	}
-	if hdr.Kind != "tunnel" || hdr.Port != desktopPort {
+	if hdr.Kind != "tunnel" || hdr.Port != hostPort {
 		t.Fatalf("unexpected header: %+v", hdr)
 	}
 
-	// Now play the agent's relay role: pipe desktopConn ↔ s and ssoPort target.
+	// Now play the agent's relay role: pipe hostConn ↔ s and ssoPort target.
 	sso, err := net.Dial("tcp", "127.0.0.1:"+itoa(ssoPort))
 	if err != nil {
 		t.Fatal(err)
@@ -212,9 +244,9 @@ func TestHostLoopbackRoundTrip(t *testing.T) {
 	go io.Copy(sso, s)
 	go io.Copy(s, sso)
 
-	// Send a synthetic HTTP request through desktopConn.
-	_, _ = desktopConn.Write([]byte("GET /cb?code=abc HTTP/1.0\r\nHost: localhost\r\n\r\n"))
-	br := bufio.NewReader(desktopConn)
+	// Send a synthetic HTTP request through hostConn.
+	_, _ = hostConn.Write([]byte("GET /cb?code=abc HTTP/1.0\r\nHost: localhost\r\n\r\n"))
+	br := bufio.NewReader(hostConn)
 	line, err := br.ReadString('\n')
 	if err != nil {
 		t.Fatalf("read response: %v", err)
@@ -230,7 +262,7 @@ func TestHostLoopbackPortCollision(t *testing.T) {
 	cfg.Network, cfg.Addr = "tcp", "127.0.0.1:0"
 	_, dial := startHost(t, cfg)
 
-	// Hold a port on the desktop side so the host's bind will fail.
+	// Hold a port on the host side so the host's bind will fail.
 	hold, err := net.Listen("tcp", "127.0.0.1:0")
 	skipIfSocketDenied(t, err)
 	if err != nil {

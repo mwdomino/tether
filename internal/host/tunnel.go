@@ -15,13 +15,13 @@ import (
 )
 
 // TunnelGracePeriod is the idle window after the last tunnel connection
-// closes before the desktop-side listener is torn down. Exported as a var
+// closes before the host-side listener is torn down. Exported as a var
 // (not a const) so cross-package tests can shorten it. Production callers
 // should not modify it.
 var TunnelGracePeriod = 60 * time.Second
 
-// tunnelMgr binds desktop loopback ports and opens substreams back to the
-// agent for each incoming connection.
+// tunnelMgr binds host loopback ports and opens substreams back to the agent
+// for each incoming connection.
 type tunnelMgr struct {
 	session *yamux.Session
 	log     *slog.Logger
@@ -32,11 +32,11 @@ type tunnelMgr struct {
 }
 
 type tunnelListener struct {
-	port   int
-	ln     net.Listener
-	active int32 // current number of in-flight tunnel conns
-	parent *tunnelMgr
-	timer  *time.Timer
+	port      int
+	listeners []net.Listener
+	active    int32 // current number of in-flight tunnel conns
+	parent    *tunnelMgr
+	timer     *time.Timer
 }
 
 func newTunnelMgr(session *yamux.Session, log *slog.Logger) *tunnelMgr {
@@ -52,16 +52,18 @@ func newTunnelMgr(session *yamux.Session, log *slog.Logger) *tunnelMgr {
 // listeners are released and the offending port is returned.
 func (m *tunnelMgr) bind(ports []int) (failedPort int, err error) {
 	for _, p := range ports {
-		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", p))
+		listeners, err := listenLoopbackPort(p)
 		if err != nil {
 			m.releaseAll()
 			return p, err
 		}
-		tl := &tunnelListener{port: p, ln: ln, parent: m}
+		tl := &tunnelListener{port: p, listeners: listeners, parent: m}
 		m.mu.Lock()
 		m.listeners[p] = tl
 		m.mu.Unlock()
-		go tl.acceptLoop()
+		for _, ln := range listeners {
+			go tl.acceptLoop(ln)
+		}
 		// Do NOT arm the grace timer here. The grace period is a tail buffer
 		// for follow-on requests (favicons, IdP "you can close this tab" pages)
 		// AFTER the first callback completes — not a kill switch for the
@@ -78,7 +80,9 @@ func (m *tunnelMgr) releaseAll() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, tl := range m.listeners {
-		_ = tl.ln.Close()
+		for _, ln := range tl.listeners {
+			_ = ln.Close()
+		}
 		if tl.timer != nil {
 			tl.timer.Stop()
 		}
@@ -102,9 +106,23 @@ func (m *tunnelMgr) wait(ctx context.Context) {
 	m.releaseAll()
 }
 
-func (tl *tunnelListener) acceptLoop() {
+func listenLoopbackPort(port int) ([]net.Listener, error) {
+	ipv4, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		return nil, err
+	}
+	listeners := []net.Listener{ipv4}
+
+	ipv6, err := net.Listen("tcp", fmt.Sprintf("[::1]:%d", port))
+	if err == nil {
+		listeners = append(listeners, ipv6)
+	}
+	return listeners, nil
+}
+
+func (tl *tunnelListener) acceptLoop(ln net.Listener) {
 	for {
-		c, err := tl.ln.Accept()
+		c, err := ln.Accept()
 		if err != nil {
 			return
 		}
@@ -139,17 +157,17 @@ func (tl *tunnelListener) handleConn(c net.Conn) {
 		return
 	}
 
-	upN, downN := int64(0), int64(0)
+	var upN, downN atomic.Int64
 	upDone := make(chan struct{})
 	downDone := make(chan struct{})
 	go func() {
 		n, _ := io.Copy(stream, c)
-		upN = n
+		upN.Store(n)
 		close(upDone)
 	}()
 	go func() {
 		n, _ := io.Copy(c, stream)
-		downN = n
+		downN.Store(n)
 		close(downDone)
 	}()
 
@@ -175,7 +193,7 @@ func (tl *tunnelListener) handleConn(c net.Conn) {
 		case <-time.After(3 * time.Second):
 		}
 	}
-	tl.parent.log.Info("tunnel: pipe ended", "port", tl.port, "bytes_to_agent", upN, "bytes_from_agent", downN)
+	tl.parent.log.Info("tunnel: pipe ended", "port", tl.port, "bytes_to_agent", upN.Load(), "bytes_from_agent", downN.Load())
 }
 
 func (tl *tunnelListener) armGrace() {
@@ -219,7 +237,9 @@ func (m *tunnelMgr) removeListener(port int) {
 		return
 	}
 	delete(m.listeners, port)
-	_ = tl.ln.Close()
+	for _, ln := range tl.listeners {
+		_ = ln.Close()
+	}
 	empty := len(m.listeners) == 0
 	m.mu.Unlock()
 	if empty {

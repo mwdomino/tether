@@ -41,6 +41,31 @@ func TestRenderUnitContainsBinary(t *testing.T) {
 	}
 }
 
+func TestRenderLinuxUnitQuotesExecStartArguments(t *testing.T) {
+	got := renderUnitFor("linux", "/opt/tether bin/tether", []string{"--auth-token", `tok with " quote`})
+	want := `ExecStart="/opt/tether bin/tether" host --auth-token "tok with \" quote"`
+	if !strings.Contains(got, want) {
+		t.Fatalf("linux ExecStart not safely quoted; want substring %q in:\n%s", want, got)
+	}
+}
+
+func TestRenderDarwinUnitEscapesXMLArguments(t *testing.T) {
+	got := renderUnitFor("darwin", "/Applications/Tether & Tools/tether", []string{"--auth-token", "a<b&c"})
+	for _, want := range []string{"/Applications/Tether &amp; Tools/tether", "a&lt;b&amp;c"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("darwin plist missing escaped substring %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestRenderWindowsUnitQuotesExtraArguments(t *testing.T) {
+	got := renderUnitFor("windows", `C:\\Program Files\\tether\\tether.exe`, []string{"--auth-token", `tok with " quote`})
+	want := `start "" "C:\\Program Files\\tether\\tether.exe" host --auth-token "tok with \" quote"`
+	if !strings.Contains(got, want) {
+		t.Fatalf("windows startup command not safely quoted; want substring %q in:\n%s", want, got)
+	}
+}
+
 // TestUninstallMissingIsNoop verifies uninstall does not error when no file is present.
 func TestUninstallMissingIsNoop(t *testing.T) {
 	// Redirect UnitPath into a temp dir for the duration of this test.

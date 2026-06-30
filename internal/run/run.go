@@ -1,5 +1,5 @@
 // Package run implements `tether run`: it wraps a command with an ephemeral
-// browser shim so OAuth/SSO logins work on a headless box without installing
+// browser shim so OAuth/SSO logins work on an agent without installing
 // anything. The shim is written to a temp dir, exposed via $BROWSER and $PATH
 // for the child process only, and removed when the command exits.
 package run

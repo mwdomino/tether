@@ -1,4 +1,4 @@
-// Package shim installs the headless-side browser shim used as $BROWSER.
+// Package shim installs the agent-side browser shim used as $BROWSER.
 package shim
 
 import (
@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-// Options controls headless-side shim installation.
+// Options controls agent-side shim installation.
 type Options struct {
 	// BinDir is where tether-open is written. Defaults to ~/.local/bin on
 	// Unix-like systems and %LOCALAPPDATA%\tether\bin on Windows.
@@ -32,7 +32,7 @@ type Result struct {
 	LogDir      string
 }
 
-// Install writes an idempotent headless-side browser shim.
+// Install writes an idempotent agent-side browser shim.
 func Install(binaryPath string, opts Options) (Result, error) {
 	if binaryPath == "" {
 		return Result{}, errors.New("shim: binary path required")

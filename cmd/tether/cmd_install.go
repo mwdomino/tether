@@ -25,7 +25,7 @@ func newInstallCmd() *cobra.Command {
 			}
 			path, _ := install.UnitPath()
 			fmt.Fprintf(os.Stderr, "tether: installed and started (%s)\n", path)
-			fmt.Fprintln(os.Stderr, "tether: add this to ~/.ssh/config on this browser box:")
+			fmt.Fprintln(os.Stderr, "tether: add this to ~/.ssh/config on this host:")
 			fmt.Fprintf(os.Stderr, "  RemoteForward 9999 %s\n", remoteForwardTarget(opts))
 			return nil
 		},
