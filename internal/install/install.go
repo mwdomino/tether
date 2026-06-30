@@ -5,6 +5,7 @@
 package install
 
 import (
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"os"
@@ -114,10 +115,8 @@ func renderUnit(binaryPath string) string {
 func renderUnitFor(goos, binaryPath string, extraArgs []string) string {
 	switch goos {
 	case "linux":
-		execStart := binaryPath + " host"
-		if len(extraArgs) > 0 {
-			execStart += " " + strings.Join(extraArgs, " ")
-		}
+		args := append([]string{binaryPath, "host"}, extraArgs...)
+		execStart := joinSystemdArgs(args)
 		return fmt.Sprintf(`[Unit]
 Description=Tether host daemon (remote browser opener)
 After=default.target
@@ -132,11 +131,11 @@ WantedBy=default.target
 `, execStart)
 	case "darwin":
 		argStrings := []string{
-			fmt.Sprintf("        <string>%s</string>", binaryPath),
+			fmt.Sprintf("        <string>%s</string>", xmlEscape(binaryPath)),
 			"        <string>host</string>",
 		}
 		for _, a := range extraArgs {
-			argStrings = append(argStrings, fmt.Sprintf("        <string>%s</string>", a))
+			argStrings = append(argStrings, fmt.Sprintf("        <string>%s</string>", xmlEscape(a)))
 		}
 		return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -156,16 +155,59 @@ WantedBy=default.target
 </plist>
 `, strings.Join(argStrings, "\n"))
 	case "windows":
-		cmdLine := fmt.Sprintf(`"%s" host`, binaryPath)
-		if len(extraArgs) > 0 {
-			cmdLine += " " + strings.Join(extraArgs, " ")
-		}
+		args := append([]string{binaryPath, "host"}, extraArgs...)
 		return fmt.Sprintf(`@echo off
 start "" %s
-`, cmdLine)
+`, joinWindowsArgs(args))
 	default:
 		return ""
 	}
+}
+
+func joinSystemdArgs(args []string) string {
+	quoted := make([]string, 0, len(args))
+	for _, arg := range args {
+		quoted = append(quoted, quoteSystemdArg(arg))
+	}
+	return strings.Join(quoted, " ")
+}
+
+func quoteSystemdArg(arg string) string {
+	if arg == "" {
+		return `""`
+	}
+	for _, r := range arg {
+		if !(r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || strings.ContainsRune("/._:=@%+-", r)) {
+			escaped := strings.ReplaceAll(arg, `\\`, `\\\\`)
+			escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+			return `"` + escaped + `"`
+		}
+	}
+	return arg
+}
+
+func xmlEscape(s string) string {
+	var b strings.Builder
+	_ = xml.EscapeText(&b, []byte(s))
+	return b.String()
+}
+
+func joinWindowsArgs(args []string) string {
+	quoted := make([]string, 0, len(args))
+	for _, arg := range args {
+		quoted = append(quoted, quoteWindowsArg(arg))
+	}
+	return strings.Join(quoted, " ")
+}
+
+func quoteWindowsArg(arg string) string {
+	if arg == "" {
+		return `""`
+	}
+	if !strings.ContainsAny(arg, " \t\"") {
+		return arg
+	}
+	return `"` + strings.ReplaceAll(arg, `"`, `\"`) + `"`
 }
 
 func enable(unitPath, binaryPath string, extraArgs []string) error {

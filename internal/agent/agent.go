@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/hashicorp/yamux"
@@ -16,7 +17,7 @@ import (
 
 var (
 	ErrHostUnreachable = errors.New("tether: host unreachable")
-	ErrPortCollision   = errors.New("tether: browser-box port already in use")
+	ErrPortCollision   = errors.New("tether: host port already in use")
 	ErrAuthMismatch    = errors.New("tether: auth token mismatch")
 	ErrTimeout         = errors.New("tether: timeout waiting for callback")
 	ErrBrowserLaunch   = errors.New("tether: browser launch failed")
@@ -81,8 +82,8 @@ func Run(ctx context.Context, cfg Config) error {
 
 	// If we may need to accept tunnel substreams, start the accept goroutine BEFORE
 	// the control round-trip. The host may open a substream as soon as the browser
-	// hits the browser-box loopback port, which can happen before the agent reads
-	// the OK response.
+	// hits the host loopback port, which can happen before the agent reads the OK
+	// response.
 	var (
 		doneCh    chan struct{}
 		streams   chan *yamux.Stream
@@ -137,7 +138,7 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 		return classifyHostError(resp.Error)
 	}
-	cfg.Logger.Info("agent: host accepted request; browser launched on browser box")
+	cfg.Logger.Info("agent: host accepted request; browser launched on host")
 
 	if len(req.LoopbackPorts) == 0 {
 		cfg.Logger.Info("agent: no loopback ports; exiting")
@@ -193,21 +194,21 @@ func handleTunnel(cfg Config, s *yamux.Stream) {
 	cfg.Logger.Info("agent: local dial succeeded; piping bytes", "port", hdr.Port, "local", local.RemoteAddr())
 	defer local.Close()
 
-	upN, downN := int64(0), int64(0)
+	var upN, downN atomic.Int64
 	upDone := make(chan struct{})
 	downDone := make(chan struct{})
 	go func() {
 		n, _ := io.Copy(local, s)
-		upN = n
+		upN.Store(n)
 		close(upDone)
 	}()
 	go func() {
 		n, _ := io.Copy(s, local)
-		downN = n
+		downN.Store(n)
 		close(downDone)
 	}()
 
-	// Mirror the host's pattern: if the browser-box to agent direction finishes
+	// Mirror the host's pattern: if the host-to-agent direction finishes
 	// first (browser closed before AWS CLI responded), give AWS CLI a window
 	// to write its response back. Without this, the deferred local.Close()
 	// would cut AWS CLI off mid-response.
@@ -224,7 +225,7 @@ func handleTunnel(cfg Config, s *yamux.Stream) {
 		}
 	}
 	cfg.Logger.Info("agent: tunnel pipe ended",
-		"port", hdr.Port, "bytes_from_desktop", upN, "bytes_from_local", downN)
+		"port", hdr.Port, "bytes_from_host", upN.Load(), "bytes_from_agent", downN.Load())
 }
 
 func classifyHostError(msg string) error {

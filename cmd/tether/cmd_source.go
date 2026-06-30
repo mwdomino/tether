@@ -12,7 +12,7 @@ func newSourceCmd() *cobra.Command {
 	var binDir string
 	c := &cobra.Command{
 		Use:   "source",
-		Short: "Print shell exports for the headless-side shim.",
+		Short: "Print shell exports for the agent-side shim.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			script, err := shim.SourceScript(binDir)
 			if err != nil {

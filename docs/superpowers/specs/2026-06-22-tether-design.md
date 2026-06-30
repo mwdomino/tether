@@ -3,7 +3,7 @@
 ## Overview
 
 Tether lets a headless server delegate "open this URL in a browser" to a
-desktop machine over an existing SSH connection. Unlike
+host machine over an existing SSH connection. Unlike
 [lemonade](https://github.com/lemonade-command/lemonade), it transparently
 solves the OAuth/SSO localhost-callback case: when a tool on the headless
 side starts an HTTP listener on `localhost:PORT` and expects a redirect
@@ -12,19 +12,19 @@ channel so the SSO flow completes correctly.
 
 ## Goals
 
-- Open URLs requested on a headless server in a browser on a desktop
+- Open URLs requested on a headless server in a browser on a host
   machine the user is sitting at, over an existing SSH session.
 - Support SSO / OAuth flows that use `localhost` / `127.0.0.1` /
-  `[::1]` callbacks — the desktop browser's hit to that loopback URL
+  `[::1]` callbacks — the host browser's hit to that loopback URL
   must reach the original tool on the headless server.
-- Cross-platform desktop side: Linux, macOS, Windows (amd64 + arm64).
+- Cross-platform host side: Linux, macOS, Windows (amd64 + arm64).
 - Single Go binary released via goreleaser.
 
 ## Non-goals (v1)
 
 - Clipboard copy/paste (lemonade-style). The protocol leaves room for
   it; the v1 binary does not ship it.
-- File-open (remote `xdg-open /path/to.pdf` opening on the desktop).
+- File-open (remote `xdg-open /path/to.pdf` opening on the host).
 - URL allow-listing.
 - Code signing / macOS notarization.
 - Any non-SSH transport (raw TCP across networks, mTLS, Tailscale-aware
@@ -49,7 +49,7 @@ shared `--auth-token` flag exists as an opt-in escape hatch.
 
 One Go binary, two subcommands:
 
-- **`tether host`** — long-lived daemon on the desktop. Started by the
+- **`tether host`** — long-lived daemon on the host. Started by the
   user's service manager (systemd user unit / launchd agent / Windows
   service). Owns the local listener, dispatches incoming requests, and
   shells out to the OS default URL handler (`open` on macOS,
@@ -65,16 +65,16 @@ One Go binary, two subcommands:
 ### Wiring
 
 The user adds one line per relevant host to `~/.ssh/config` on the
-desktop:
+host:
 
 ```
-Host headless-box
+Host agent
   RemoteForward 9999 /home/<user>/.local/share/tether/tether.sock
 ```
 
 (On Windows, `RemoteForward 9999 127.0.0.1:9999`.)
 
-This exposes the desktop's local listener inside the headless box on
+This exposes the host's local listener inside the agent on
 port 9999. The agent connects to `127.0.0.1:9999` on the headless side.
 
 ## Wire protocol
@@ -118,11 +118,11 @@ Response:
 or
 
 ```json
-{ "ok": false, "error": "port 8085 already in use on desktop" }
+{ "ok": false, "error": "port 8085 already in use on host" }
 ```
 
 The host attempts to bind each loopback port on `127.0.0.1` on the
-desktop **before** responding `ok: true`. If any bind fails the host
+host **before** responding `ok: true`. If any bind fails the host
 releases the ones it already bound, returns `ok: false`, and the agent
 exits non-zero.
 
@@ -132,7 +132,7 @@ the host returns `ok: false` with `error: "browser launch failed: ..."`.
 ### Tunnel substreams
 
 For each port the host bound, it listens on `127.0.0.1:PORT` on the
-desktop. Each incoming TCP connection to that listener triggers the
+host. Each incoming TCP connection to that listener triggers the
 host to open a new yamux substream toward the agent, prefixed with a
 length-prefixed JSON header:
 
@@ -152,7 +152,7 @@ half-closes the corresponding side of the dialed TCP connection.
   response arrives and the browser has been launched.
 - If `loopback_ports` is non-empty: agent stays alive while the control
   stream is open. The host keeps the control stream open while any of
-  its desktop listeners are still bound. The host releases a listener
+  its host listeners are still bound. The host releases a listener
   (and tears it down) 10 seconds after the last tunnel TCP connection
   on that port closes — grace period for follow-on requests (favicons,
   redirects to a "you can close this tab" page, etc.). When all
@@ -190,7 +190,7 @@ Env vars mirror the flags: `TETHER_SERVER`, `TETHER_SOCKET`,
 
 ### Install patterns (documented, not automated)
 
-On the headless box, the user installs a small **backgrounding** shim and
+On the agent, the user installs a small **backgrounding** shim and
 points `$BROWSER` (or symlinks `xdg-open`) at it. The shim must exit
 immediately so the calling tool's `webbrowser.open()` returns — otherwise
 tools that use Python's `webbrowser` module (notably AWS CLI's
@@ -245,7 +245,7 @@ entries automatically.
 
 | Condition                                | Behavior                                                                 | Exit |
 |------------------------------------------|--------------------------------------------------------------------------|------|
-| Loopback port already bound on desktop   | Host returns clear error; agent prints it; no browser opened.            | 2    |
+| Loopback port already bound on host   | Host returns clear error; agent prints it; no browser opened.            | 2    |
 | Host unreachable from agent              | Agent prints `failed to connect to host on ... — is RemoteForward set up?` | 3  |
 | Auth token mismatch                      | Host logs + disconnects; agent prints + exits.                           | 4    |
 | Timeout waiting for callback             | Agent prints; host listeners released.                                   | 5    |
@@ -286,7 +286,7 @@ systemd/launchd/Event Viewer); agent writes to stderr.
     the host invoked it with the right URL.
   - Loopback round-trip: agent listens on a real loopback port on the
     test machine playing the role of "the SSO tool"; host's bound
-    desktop port accepts a synthetic HTTP request; assert bytes
+    host port accepts a synthetic HTTP request; assert bytes
     arrive at the agent-side listener unchanged and the response
     flows back.
   - Port-collision error path.

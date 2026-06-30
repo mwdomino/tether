@@ -94,6 +94,102 @@ func mockBrowserCmd(markPath string) []string {
 	return []string{"sh", "-c", "printf %s \"$1\" > '" + markPath + "'", "sh"}
 }
 
+func TestAgentLoopbackIPv6EndToEnd(t *testing.T) {
+	if !supportsIPv6Loopback(t) {
+		t.Skip("IPv6 loopback is not available")
+	}
+	dir := t.TempDir()
+	mark := filepath.Join(dir, "url.txt")
+
+	// SSO tool target on the agent side.
+	ssoLn, err := net.Listen("tcp", "127.0.0.1:0")
+	skipIfSocketDenied(t, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ssoLn.Close()
+	go func() {
+		conn, err := ssoLn.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		buf := make([]byte, 4096)
+		_, _ = conn.Read(buf)
+		_, _ = conn.Write([]byte("HTTP/1.0 200 OK\r\nContent-Length: 2\r\n\r\nOK"))
+	}()
+	ssoPort := ssoLn.Addr().(*net.TCPAddr).Port
+
+	// Pick a free IPv6 host-side port the host should bind.
+	tmp, err := net.Listen("tcp", "[::1]:0")
+	skipIfSocketDenied(t, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostPort := tmp.Addr().(*net.TCPAddr).Port
+	tmp.Close()
+
+	prevGrace := host.TunnelGracePeriod
+	host.TunnelGracePeriod = 500 * time.Millisecond
+	defer func() { host.TunnelGracePeriod = prevGrace }()
+
+	network, addr := startHost(t, mockBrowserCmd(mark))
+
+	url := "https://idp/auth?redirect_uri=http://[::1]:" + itoaT(hostPort) + "/cb"
+	errCh := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		errCh <- Run(ctx, Config{
+			Network: network,
+			Addr:    addr,
+			URL:     url,
+			Timeout: 5 * time.Second,
+			LoopbackDialer: func(_ int) (net.Conn, error) {
+				return net.Dial("tcp", "127.0.0.1:"+itoaT(ssoPort))
+			},
+		})
+	}()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		c, err := net.Dial("tcp", "[::1]:"+itoaT(hostPort))
+		if err == nil {
+			_, _ = c.Write([]byte("GET /cb?code=xyz HTTP/1.0\r\nHost: [::1]\r\n\r\n"))
+			buf := make([]byte, 256)
+			n, _ := c.Read(buf)
+			c.Close()
+			if n == 0 || !strings.Contains(string(buf[:n]), "200 OK") {
+				t.Fatalf("bad response: %q", string(buf[:n]))
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("IPv6 host-side port never bound: %v", err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("agent: %v", err)
+		}
+	case <-time.After(4 * time.Second):
+		t.Fatal("agent did not exit in time")
+	}
+}
+
+func supportsIPv6Loopback(t *testing.T) bool {
+	t.Helper()
+	ln, err := net.Listen("tcp", "[::1]:0")
+	if err != nil {
+		return false
+	}
+	_ = ln.Close()
+	return true
+}
+
 func TestAgentLoopbackEndToEnd(t *testing.T) {
 	dir := t.TempDir()
 	mark := filepath.Join(dir, "url.txt")
@@ -117,13 +213,13 @@ func TestAgentLoopbackEndToEnd(t *testing.T) {
 	}()
 	ssoPort := ssoLn.Addr().(*net.TCPAddr).Port
 
-	// Pick a free desktop-side port the host should bind.
+	// Pick a free host-side port the host should bind.
 	tmp, err := net.Listen("tcp", "127.0.0.1:0")
 	skipIfSocketDenied(t, err)
 	if err != nil {
 		t.Fatal(err)
 	}
-	desktopPort := tmp.Addr().(*net.TCPAddr).Port
+	hostPort := tmp.Addr().(*net.TCPAddr).Port
 	tmp.Close()
 
 	// Shorten the host's tunnel grace period so the test isn't bound to the
@@ -135,7 +231,7 @@ func TestAgentLoopbackEndToEnd(t *testing.T) {
 	network, addr := startHost(t, mockBrowserCmd(mark))
 
 	// Run agent in a goroutine; it will block on tunnel relay until callback completes.
-	url := "https://idp/auth?redirect_uri=http://localhost:" + itoaT(desktopPort) + "/cb"
+	url := "https://idp/auth?redirect_uri=http://localhost:" + itoaT(hostPort) + "/cb"
 	errCh := make(chan error, 1)
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -145,17 +241,17 @@ func TestAgentLoopbackEndToEnd(t *testing.T) {
 			Addr:    addr,
 			URL:     url,
 			Timeout: 5 * time.Second,
-			// Override: dial the SSO tool on its actual port, not desktopPort.
+			// Override: dial the SSO tool on its actual port, not hostPort.
 			LoopbackDialer: func(_ int) (net.Conn, error) {
 				return net.Dial("tcp", "127.0.0.1:"+itoaT(ssoPort))
 			},
 		})
 	}()
 
-	// Wait for the desktop-side listener to be bound.
+	// Wait for the host-side listener to be bound.
 	deadline := time.Now().Add(3 * time.Second)
 	for {
-		c, err := net.Dial("tcp", "127.0.0.1:"+itoaT(desktopPort))
+		c, err := net.Dial("tcp", "127.0.0.1:"+itoaT(hostPort))
 		if err == nil {
 			// Send synthetic HTTP callback.
 			_, _ = c.Write([]byte("GET /cb?code=xyz HTTP/1.0\r\nHost: localhost\r\n\r\n"))
@@ -168,7 +264,7 @@ func TestAgentLoopbackEndToEnd(t *testing.T) {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("desktop port never bound: %v", err)
+			t.Fatalf("host port never bound: %v", err)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}

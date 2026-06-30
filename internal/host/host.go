@@ -30,7 +30,7 @@ type Config struct {
 	Logger *slog.Logger
 }
 
-// Host is the browser-box daemon.
+// Host is the GUI-side daemon that opens browsers and relays callbacks.
 type Host struct {
 	cfg Config
 	log *slog.Logger
@@ -70,8 +70,9 @@ func (h *Host) Addr() net.Addr {
 // the listener returns a fatal error.
 func (h *Host) Serve(ctx context.Context) error {
 	if h.cfg.Network == "unix" {
-		// Remove a stale socket if present.
-		_ = os.Remove(h.cfg.Addr)
+		if err := prepareUnixSocketPath(h.cfg.Addr); err != nil {
+			return err
+		}
 	}
 	ln, err := net.Listen(h.cfg.Network, h.cfg.Addr)
 	if err != nil {
@@ -137,7 +138,7 @@ func (h *Host) handleConn(ctx context.Context, conn net.Conn) {
 			h.log.Error("bind loopback port", "port", failed, "err", err)
 			_ = proto.WriteFrame(control, proto.Response{
 				OK:    false,
-				Error: fmt.Sprintf("port %d already in use on browser box: %s", failed, err.Error()),
+				Error: fmt.Sprintf("port %d already in use on host: %s", failed, err.Error()),
 			})
 			return
 		}
@@ -169,6 +170,23 @@ func (h *Host) handleConn(ctx context.Context, conn net.Conn) {
 
 	mgr.wait(ctx)
 	// Closing control here signals the agent we're done.
+}
+
+func prepareUnixSocketPath(path string) error {
+	st, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("stat unix socket path %s: %w", path, err)
+	}
+	if st.Mode()&os.ModeSocket == 0 {
+		return fmt.Errorf("unix socket path %s exists and is not a socket", path)
+	}
+	if err := os.Remove(path); err != nil {
+		return fmt.Errorf("remove stale unix socket %s: %w", path, err)
+	}
+	return nil
 }
 
 func (h *Host) launchBrowser(url string) error {

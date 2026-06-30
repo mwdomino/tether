@@ -23,7 +23,7 @@ func newHostCmd() *cobra.Command {
 	)
 	c := &cobra.Command{
 		Use:   "host",
-		Short: "Run the browser-box daemon that opens browsers and relays loopback callbacks.",
+		Short: "Run the host daemon that opens browsers and relays loopback callbacks.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg := host.Config{Browser: browser, AuthToken: authToken}
 			switch {

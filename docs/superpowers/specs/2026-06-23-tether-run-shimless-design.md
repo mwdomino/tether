@@ -2,9 +2,9 @@
 
 ## Problem
 
-Today the headless box requires a two-step setup: `tether install-shim` (writes
+Today the agent requires a two-step setup: `tether install-shim` (writes
 `~/.local/bin/tether-open` and an `xdg-open` shim) plus `eval "$(tether source)"`
-(exports `PATH`/`BROWSER`). This installs files on the headless box. Some users
+(exports `PATH`/`BROWSER`). This installs files on the agent. Some users
 want a no-install option — a locked-down box, a one-off login, or just less
 ceremony.
 
@@ -83,7 +83,7 @@ error and exits non-zero.
 
 ## Docs
 
-Restructure the README headless-box setup into two clearly labeled options:
+Restructure the README agent setup into two clearly labeled options:
 
 - **(A) Shimless: `tether run`** — no install; good for one-off logins or
   locked-down boxes. `tether run -- aws sso login`.
@@ -94,8 +94,8 @@ to the flags reference.
 
 ## Out of scope
 
-- No changes to the browser-box `host`/`install` flow.
+- No changes to the host `host`/`install` flow.
 - No change to the wire protocol or `tether open` behavior.
 - `tether run` still requires the host service and SSH `RemoteForward` to be set
-  up on the browser box — it only removes the headless-box shim install/source
+  up on the host — it only removes the agent shim install/source
   steps.

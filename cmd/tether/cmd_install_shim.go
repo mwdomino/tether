@@ -16,7 +16,7 @@ func newInstallShimCmd() *cobra.Command {
 	opts.InstallXDGOpen = runtime.GOOS == "linux"
 	c := &cobra.Command{
 		Use:   "install-shim",
-		Short: "Install the headless-side browser shim used as BROWSER.",
+		Short: "Install the agent-side browser shim used as BROWSER.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			exe, err := currentExecutable()
 			if err != nil {
