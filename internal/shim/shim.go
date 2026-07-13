@@ -6,17 +6,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 )
 
 // Options controls agent-side shim installation.
 type Options struct {
-	// BinDir is where tether-open is written. Defaults to ~/.local/bin on
-	// Unix-like systems and %LOCALAPPDATA%\tether\bin on Windows.
+	// BinDir is where tether-open is written. Defaults to ~/.local/bin.
 	BinDir string
-	// LogDir is where tether-open writes open.log. Defaults to ~/.cache/tether
-	// on Unix-like systems and %LOCALAPPDATA%\tether on Windows.
+	// LogDir is where tether-open writes open.log. Defaults to ~/.cache/tether.
 	LogDir string
 	// InstallXDGOpen creates or updates BinDir/xdg-open as a symlink to the shim.
 	InstallXDGOpen bool
@@ -60,9 +57,6 @@ func Install(binaryPath string, opts Options) (Result, error) {
 
 	res := Result{ShimPath: shimPath, BinDir: binDir, LogDir: logDir}
 	if opts.InstallXDGOpen {
-		if runtime.GOOS == "windows" {
-			return Result{}, errors.New("shim: xdg-open shim is only supported on Unix-like systems")
-		}
 		xdgPath := filepath.Join(binDir, "xdg-open")
 		if err := installSymlink(xdgPath, shimPath, opts.ForceXDGOpen); err != nil {
 			return Result{}, err
@@ -78,10 +72,6 @@ func SourceScript(binDir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if runtime.GOOS == "windows" {
-		return fmt.Sprintf("$env:Path = %q + ';' + $env:Path\n$env:BROWSER = %q\n",
-			binDir, filepath.Join(binDir, shimName())), nil
-	}
 	return fmt.Sprintf("export PATH=%s:\"$PATH\"\nexport BROWSER=%s\n",
 		shQuote(binDir), shQuote(filepath.Join(binDir, shimName()))), nil
 }
@@ -89,13 +79,6 @@ func SourceScript(binDir string) (string, error) {
 func defaultedBinDir(binDir string) (string, error) {
 	if binDir != "" {
 		return filepath.Abs(binDir)
-	}
-	if runtime.GOOS == "windows" {
-		base := os.Getenv("LOCALAPPDATA")
-		if base == "" {
-			return "", errors.New("LOCALAPPDATA is unset")
-		}
-		return filepath.Join(base, "tether", "bin"), nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -108,13 +91,6 @@ func defaultedLogDir(logDir string) (string, error) {
 	if logDir != "" {
 		return filepath.Abs(logDir)
 	}
-	if runtime.GOOS == "windows" {
-		base := os.Getenv("LOCALAPPDATA")
-		if base == "" {
-			return "", errors.New("LOCALAPPDATA is unset")
-		}
-		return filepath.Join(base, "tether"), nil
-	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("user home: %w", err)
@@ -123,17 +99,10 @@ func defaultedLogDir(logDir string) (string, error) {
 }
 
 func shimName() string {
-	if runtime.GOOS == "windows" {
-		return "tether-open.cmd"
-	}
 	return "tether-open"
 }
 
 func renderShim(binaryPath, logDir string) string {
-	if runtime.GOOS == "windows" {
-		return fmt.Sprintf("@echo off\r\nstart \"\" /b %s open %%* ^>^> %s 2^>^&1\r\nexit /b 0\r\n",
-			winQuote(binaryPath), winQuote(filepath.Join(logDir, "open.log")))
-	}
 	return fmt.Sprintf(`#!/usr/bin/env sh
 mkdir -p %s
 nohup %s open "$@" >>%s 2>&1 &
@@ -183,8 +152,4 @@ func installSymlink(path, target string, force bool) error {
 
 func shQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
-}
-
-func winQuote(s string) string {
-	return `"` + strings.ReplaceAll(s, `"`, `\"`) + `"`
 }

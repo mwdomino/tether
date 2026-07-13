@@ -5,7 +5,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -88,9 +87,6 @@ func TestAgentHostUnreachable(t *testing.T) {
 }
 
 func mockBrowserCmd(markPath string) []string {
-	if runtime.GOOS == "windows" {
-		return []string{"powershell", "-Command", "Set-Content -NoNewline -Path '" + markPath + "' -Value $args[0]", "--"}
-	}
 	return []string{"sh", "-c", "printf %s \"$1\" > '" + markPath + "'", "sh"}
 }
 

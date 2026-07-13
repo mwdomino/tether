@@ -18,7 +18,7 @@ func main() {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
-	root.AddCommand(newHostCmd(), newOpenCmd(), newRunCmd(), newInstallCmd(), newInstallShimCmd(), newSourceCmd(), newUninstallCmd())
+	root.AddCommand(newHostCmd(), newOpenCmd(), newRunCmd(), newInstallCmd(), newInstallShimCmd(), newSourceCmd(), newUninstallCmd(), newBoxCmd(), newStatusCmd(), newReloadCmd())
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "tether:", err)
