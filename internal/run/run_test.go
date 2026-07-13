@@ -4,7 +4,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 	"time"
 )
@@ -23,9 +22,6 @@ func envMap(env []string) map[string]string {
 }
 
 func TestSetupBuildsChildEnv(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("unix shell shim test")
-	}
 	t.Setenv("HOME", t.TempDir())
 	base := []string{"PATH=/usr/bin:/bin", "FOO=bar"}
 
@@ -85,9 +81,6 @@ func TestSetupBuildsChildEnv(t *testing.T) {
 }
 
 func TestSetupSocketPassthrough(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("unix shell shim test")
-	}
 	t.Setenv("HOME", t.TempDir())
 
 	env, cleanup, err := Setup("/opt/tether/bin/tether", os.Environ(), Config{
@@ -104,9 +97,6 @@ func TestSetupSocketPassthrough(t *testing.T) {
 }
 
 func TestSetupCleanupRemovesDir(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("unix shell shim test")
-	}
 	t.Setenv("HOME", t.TempDir())
 
 	env, cleanup, err := Setup("/opt/tether/bin/tether", os.Environ(), Config{})
@@ -126,9 +116,6 @@ func TestSetupCleanupRemovesDir(t *testing.T) {
 }
 
 func TestExecPropagatesExitCode(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("uses /bin/sh")
-	}
 	code, err := Exec(os.Environ(), "sh", []string{"-c", "exit 7"}, nil, io.Discard, io.Discard)
 	if err != nil {
 		t.Fatalf("Exec returned error: %v", err)
@@ -139,9 +126,6 @@ func TestExecPropagatesExitCode(t *testing.T) {
 }
 
 func TestExecZeroOnSuccess(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("uses /bin/sh")
-	}
 	code, err := Exec(os.Environ(), "sh", []string{"-c", "exit 0"}, nil, io.Discard, io.Discard)
 	if err != nil || code != 0 {
 		t.Fatalf("Exec = (%d, %v), want (0, nil)", code, err)

@@ -7,7 +7,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -52,9 +51,6 @@ func startHost(t *testing.T, cfg Config) (h *Host, dial func() net.Conn) {
 }
 
 func TestHostUnixSocketPathRefusesRegularFile(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("unix sockets are not used on Windows")
-	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, "tether.sock")
 	if err := os.WriteFile(path, []byte("do not remove"), 0o600); err != nil {
@@ -138,10 +134,6 @@ func TestHostOpenURLNoLoopback(t *testing.T) {
 // to markPath when the command runs.
 func mockBrowserCmd(t *testing.T, markPath string) []string {
 	t.Helper()
-	if runtime.GOOS == "windows" {
-		// cmd /c (set /p =) > markPath — easier to use PowerShell.
-		return []string{"powershell", "-Command", "Set-Content -NoNewline -Path '" + markPath + "' -Value $args[0]", "--"}
-	}
 	return []string{"sh", "-c", "printf %s \"$1\" > " + shQuote(markPath), "sh"}
 }
 
@@ -253,6 +245,74 @@ func TestHostLoopbackRoundTrip(t *testing.T) {
 	}
 	if !strings.HasPrefix(line, "HTTP/1.0 200") {
 		t.Fatalf("unexpected response: %q", line)
+	}
+}
+
+func TestHostReportsRequestOutcome(t *testing.T) {
+	dir := t.TempDir()
+	type ev struct{ url, outcome string }
+	got := make(chan ev, 1)
+	cfg := Config{
+		Browser:   mockBrowserCmd(t, filepath.Join(dir, "url.txt")),
+		OnRequest: func(url, outcome string) { got <- ev{url, outcome} },
+	}
+	cfg.Network, cfg.Addr = "tcp", "127.0.0.1:0"
+	_, dial := startHost(t, cfg)
+
+	conn := dial()
+	defer conn.Close()
+	session, _ := yamux.Client(conn, nil)
+	stream, _ := session.OpenStream()
+	_ = proto.WriteFrame(stream, proto.Request{URL: "https://example.com/"})
+	var resp proto.Response
+	_ = proto.ReadFrame(stream, &resp)
+
+	select {
+	case e := <-got:
+		if e.url != "https://example.com/" || e.outcome != "launched" {
+			t.Fatalf("unexpected outcome event: %+v", e)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("OnRequest was not called on success")
+	}
+}
+
+func TestHostReportsCollisionOutcome(t *testing.T) {
+	dir := t.TempDir()
+	got := make(chan string, 1)
+	cfg := Config{
+		Browser:   mockBrowserCmd(t, filepath.Join(dir, "url.txt")),
+		OnRequest: func(url, outcome string) { got <- outcome },
+	}
+	cfg.Network, cfg.Addr = "tcp", "127.0.0.1:0"
+	_, dial := startHost(t, cfg)
+
+	hold, err := net.Listen("tcp", "127.0.0.1:0")
+	skipIfSocketDenied(t, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hold.Close()
+	port := hold.Addr().(*net.TCPAddr).Port
+
+	conn := dial()
+	defer conn.Close()
+	session, _ := yamux.Client(conn, nil)
+	stream, _ := session.OpenStream()
+	_ = proto.WriteFrame(stream, proto.Request{
+		URL:           "https://idp/auth?redirect_uri=http://localhost:" + itoa(port) + "/cb",
+		LoopbackPorts: []int{port},
+	})
+	var resp proto.Response
+	_ = proto.ReadFrame(stream, &resp)
+
+	select {
+	case outcome := <-got:
+		if !strings.Contains(outcome, "already in use") {
+			t.Fatalf("outcome = %q, want an 'already in use' error", outcome)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("OnRequest was not called on collision")
 	}
 }
 

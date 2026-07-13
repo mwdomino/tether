@@ -28,6 +28,10 @@ type Config struct {
 	AuthToken string
 	// Logger; defaults to slog.Default if nil.
 	Logger *slog.Logger
+	// OnRequest, if set, is invoked once per request with the URL and an
+	// outcome ("launched" on success, or an error description). It feeds the
+	// daemon's status registry; it must not block.
+	OnRequest func(url, outcome string)
 }
 
 // Host is the GUI-side daemon that opens browsers and relays callbacks.
@@ -127,6 +131,7 @@ func (h *Host) handleConn(ctx context.Context, conn net.Conn) {
 
 	if h.cfg.AuthToken != "" && req.AuthToken != h.cfg.AuthToken {
 		h.log.Warn("auth token mismatch", "remote", conn.RemoteAddr())
+		h.report(req.URL, "auth token mismatch")
 		_ = proto.WriteFrame(control, proto.Response{OK: false, Error: "auth token mismatch"})
 		return
 	}
@@ -136,10 +141,9 @@ func (h *Host) handleConn(ctx context.Context, conn net.Conn) {
 		mgr = newTunnelMgr(session, h.log)
 		if failed, err := mgr.bind(req.LoopbackPorts); err != nil {
 			h.log.Error("bind loopback port", "port", failed, "err", err)
-			_ = proto.WriteFrame(control, proto.Response{
-				OK:    false,
-				Error: fmt.Sprintf("port %d already in use on host: %s", failed, err.Error()),
-			})
+			outcome := fmt.Sprintf("port %d already in use on host: %s", failed, err.Error())
+			h.report(req.URL, outcome)
+			_ = proto.WriteFrame(control, proto.Response{OK: false, Error: outcome})
 			return
 		}
 		h.log.Info("loopback ports bound", "ports", req.LoopbackPorts)
@@ -147,6 +151,7 @@ func (h *Host) handleConn(ctx context.Context, conn net.Conn) {
 
 	if err := h.launchBrowser(req.URL); err != nil {
 		h.log.Error("browser launch", "err", err)
+		h.report(req.URL, "browser launch failed: "+err.Error())
 		if mgr != nil {
 			mgr.releaseAll()
 		}
@@ -154,6 +159,7 @@ func (h *Host) handleConn(ctx context.Context, conn net.Conn) {
 		return
 	}
 	h.log.Info("browser launched")
+	h.report(req.URL, "launched")
 	if err := proto.WriteFrame(control, proto.Response{OK: true}); err != nil {
 		h.log.Error("write control response", "err", err)
 		if mgr != nil {
@@ -187,6 +193,12 @@ func prepareUnixSocketPath(path string) error {
 		return fmt.Errorf("remove stale unix socket %s: %w", path, err)
 	}
 	return nil
+}
+
+func (h *Host) report(url, outcome string) {
+	if h.cfg.OnRequest != nil {
+		h.cfg.OnRequest(url, outcome)
+	}
 }
 
 func (h *Host) launchBrowser(url string) error {

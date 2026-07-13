@@ -3,15 +3,11 @@ package shim
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 )
 
 func TestInstallWritesIdempotentShim(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("unix shell shim test")
-	}
 	dir := t.TempDir()
 	binDir := filepath.Join(dir, "bin")
 	logDir := filepath.Join(dir, "logs")
@@ -45,9 +41,6 @@ func TestInstallWritesIdempotentShim(t *testing.T) {
 }
 
 func TestInstallDoesNotReplaceConflictingXDGOpen(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("xdg-open is Unix-only")
-	}
 	dir := t.TempDir()
 	binDir := filepath.Join(dir, "bin")
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
@@ -67,9 +60,6 @@ func TestInstallDoesNotReplaceConflictingXDGOpen(t *testing.T) {
 }
 
 func TestSourceScript(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("unix source script test")
-	}
 	dir := t.TempDir()
 	got, err := SourceScript(dir)
 	if err != nil {

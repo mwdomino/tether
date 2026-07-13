@@ -26,10 +26,6 @@ func TestUnitPathPerOS(t *testing.T) {
 		if !strings.HasSuffix(p, "/Library/LaunchAgents/com.tether.host.plist") {
 			t.Fatalf("unexpected darwin path: %s", p)
 		}
-	case "windows":
-		if !strings.HasSuffix(p, "tether-host.cmd") {
-			t.Fatalf("unexpected windows path: %s", p)
-		}
 	}
 }
 
@@ -55,14 +51,6 @@ func TestRenderDarwinUnitEscapesXMLArguments(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("darwin plist missing escaped substring %q in:\n%s", want, got)
 		}
-	}
-}
-
-func TestRenderWindowsUnitQuotesExtraArguments(t *testing.T) {
-	got := renderUnitFor("windows", `C:\\Program Files\\tether\\tether.exe`, []string{"--auth-token", `tok with " quote`})
-	want := `start "" "C:\\Program Files\\tether\\tether.exe" host --auth-token "tok with \" quote"`
-	if !strings.Contains(got, want) {
-		t.Fatalf("windows startup command not safely quoted; want substring %q in:\n%s", want, got)
 	}
 }
 

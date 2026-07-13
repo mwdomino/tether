@@ -5,70 +5,57 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"path/filepath"
-	"runtime"
 	"syscall"
 
 	"github.com/spf13/cobra"
 
-	"github.com/mwdomino/tether/internal/host"
+	"github.com/mwdomino/tether/internal/config"
+	"github.com/mwdomino/tether/internal/daemon"
 )
 
 func newHostCmd() *cobra.Command {
 	var (
-		socket    string
-		listen    string
-		browser   []string
-		authToken string
+		configPath    string
+		socketDir     string
+		controlSocket string
+		browser       []string
 	)
 	c := &cobra.Command{
 		Use:   "host",
-		Short: "Run the host daemon that opens browsers and relays loopback callbacks.",
+		Short: "Run the host daemon: keep SSH forwards alive, open browsers, and serve status.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg := host.Config{Browser: browser, AuthToken: authToken}
-			switch {
-			case listen != "":
-				cfg.Network = "tcp"
-				cfg.Addr = listen
-			case socket != "":
-				cfg.Network = "unix"
-				cfg.Addr = socket
-			default:
-				if runtime.GOOS == "windows" {
-					cfg.Network = "tcp"
-					cfg.Addr = "127.0.0.1:9999"
-				} else {
-					cfg.Network = "unix"
-					cfg.Addr = defaultSocketPath()
+			path, err := resolveConfigPath(configPath)
+			if err != nil {
+				return err
+			}
+			cs := controlSocket
+			if cs == "" {
+				cfg, err := config.Load(path)
+				if err != nil {
+					return err
+				}
+				if cs, err = cfg.ControlSocketPath(); err != nil {
+					return err
 				}
 			}
-			h, err := host.New(cfg)
+			d, err := daemon.New(daemon.Options{
+				ConfigPath:    path,
+				SocketDir:     socketDir,
+				ControlSocket: cs,
+				Browser:       browser,
+			})
 			if err != nil {
 				return err
 			}
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer cancel()
-			fmt.Fprintf(os.Stderr, "tether host listening on %s %s\n", cfg.Network, cfg.Addr)
-			return h.Serve(ctx)
+			fmt.Fprintf(os.Stderr, "tether host: daemon starting (config %s)\n", path)
+			return d.Run(ctx)
 		},
 	}
-	c.Flags().StringVar(&socket, "socket", "", "unix socket path to listen on (Linux/macOS)")
-	c.Flags().StringVar(&listen, "listen", "", "TCP host:port to listen on (Windows default 127.0.0.1:9999)")
+	c.Flags().StringVar(&configPath, "config", "", "config file path (default ~/.config/tether/config.json)")
+	c.Flags().StringVar(&socketDir, "socket-dir", "", "directory for per-box forward sockets (default $XDG_RUNTIME_DIR/tether)")
+	c.Flags().StringVar(&controlSocket, "control-socket", "", "control/IPC socket path (default from config)")
 	c.Flags().StringSliceVar(&browser, "browser", nil, "browser launch argv (URL appended)")
-	c.Flags().StringVar(&authToken, "auth-token", "", "optional shared secret required from agents")
 	return c
-}
-
-func defaultSocketPath() string {
-	if rt := os.Getenv("XDG_RUNTIME_DIR"); rt != "" {
-		return filepath.Join(rt, "tether.sock")
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "tether: XDG_RUNTIME_DIR unset and home directory lookup failed; falling back to /tmp/tether.sock")
-		return "/tmp/tether.sock"
-	}
-	dir := filepath.Join(home, ".local", "share", "tether")
-	_ = os.MkdirAll(dir, 0o700)
-	return filepath.Join(dir, "tether.sock")
 }
