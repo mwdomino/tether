@@ -8,14 +8,14 @@ cask "tether" do
   homepage "https://github.com/mwdomino/tether"
 
   app "Tether.app"
-  # The CLI ships inside the bundle; symlink it onto PATH so the app is
-  # self-contained (no separate formula needed).
-  binary "#{appdir}/Tether.app/Contents/MacOS/tether"
+  # The CLI ships inside the bundle; symlink it onto PATH as `tether` so the
+  # app is self-contained (no separate formula needed).
+  binary "#{appdir}/Tether.app/Contents/MacOS/tether-cli", target: "tether"
 
   # Best-effort daemon autostart. must_succeed:false so a Gatekeeper kill on an
   # unnotarized build cannot abort the whole install.
   postflight do
-    cli = "#{appdir}/Tether.app/Contents/MacOS/tether"
+    cli = "#{appdir}/Tether.app/Contents/MacOS/tether-cli"
     system_command cli, args: ["install"], must_succeed: false if File.exist?(cli)
   end
 
