@@ -36,11 +36,43 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: '1.26'
-      - name: Build and zip Tether.app
+      - name: Import Developer ID certificate
+        env:
+          CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+        run: |
+          KC="$RUNNER_TEMP/signing.keychain-db"
+          echo "$CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KC"
+          security default-keychain -s "$KC"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security import "$RUNNER_TEMP/cert.p12" -P "$CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KC" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KC" >/dev/null
+          rm -f "$RUNNER_TEMP/cert.p12"
+      - name: Build, sign, notarize, staple Tether.app
+        env:
+          SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           sh scripts/package-macos.sh "$VERSION" dist
-          ditto -c -k --sequesterRsrc --keepParent dist/Tether.app "dist/Tether_${VERSION}_darwin_arm64.zip"
+          APP="dist/Tether.app"
+          # Sign nested binaries, then the bundle, with the hardened runtime.
+          codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP/Contents/MacOS/tether"
+          codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP/Contents/MacOS/Tether"
+          codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP"
+          codesign --verify --strict --verbose=2 "$APP"
+          # Notarize the signed bundle, then staple the ticket to it.
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "$RUNNER_TEMP/notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" \
+            --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
+          xcrun stapler staple "$APP"
+          # Final distributable zip contains the stapled, notarized app.
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "dist/Tether_${VERSION}_darwin_arm64.zip"
       - name: Attach .app to the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
