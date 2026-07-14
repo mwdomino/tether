@@ -43,7 +43,7 @@ jobs:
           KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
         run: |
           KC="$RUNNER_TEMP/signing.keychain-db"
-          echo "$CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          printf '%s' "$CERT_P12" | tr -d '\n' | openssl base64 -d -A > "$RUNNER_TEMP/cert.p12"
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KC"
           security default-keychain -s "$KC"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KC"
