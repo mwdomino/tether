@@ -62,7 +62,7 @@ jobs:
           sh scripts/package-macos.sh "$VERSION" dist
           APP="dist/Tether.app"
           # Sign nested binaries, then the bundle, with the hardened runtime.
-          codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP/Contents/MacOS/tether"
+          codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP/Contents/MacOS/tether-cli"
           codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP/Contents/MacOS/Tether"
           codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP"
           codesign --verify --strict --verbose=2 "$APP"

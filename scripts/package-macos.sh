@@ -14,8 +14,10 @@ mkdir -p "$APP/Contents/MacOS"
 go build -o "$APP/Contents/MacOS/Tether" ./cmd/tether-gui
 
 # Bundle the CLI inside the app so the cask can symlink it onto PATH — the app
-# is then fully self-contained (no separate formula dependency).
-go build -ldflags "-X main.Version=${VERSION}" -o "$APP/Contents/MacOS/tether" ./cmd/tether
+# is then fully self-contained (no separate formula dependency). Note: the
+# name must differ from "Tether" by more than case, since the default macOS
+# filesystem is case-insensitive (otherwise the CLI clobbers the GUI binary).
+go build -ldflags "-X main.Version=${VERSION}" -o "$APP/Contents/MacOS/tether-cli" ./cmd/tether
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
