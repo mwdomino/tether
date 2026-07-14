@@ -13,6 +13,10 @@ mkdir -p "$APP/Contents/MacOS"
 # The status icon is generated at runtime, so no Resources icon is required.
 go build -o "$APP/Contents/MacOS/Tether" ./cmd/tether-gui
 
+# Bundle the CLI inside the app so the cask can symlink it onto PATH — the app
+# is then fully self-contained (no separate formula dependency).
+go build -ldflags "-X main.Version=${VERSION}" -o "$APP/Contents/MacOS/tether" ./cmd/tether
+
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
