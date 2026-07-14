@@ -28,7 +28,7 @@ Supported platforms: **macOS host + Linux agent**.
   per-box unix socket ◀── tunneled callback ───────────────┘
       │  (yamux relay; browser callbacks tunnel back to the CLI)
       ▼
-  registry (status + recent requests) ──▶ `tether status`  ·  macOS GUI (planned)
+  registry (status + recent requests) ──▶ `tether status`  ·  macOS menubar app
 ```
 
 Because tether launches the `ssh` process, it reuses everything in your
@@ -97,6 +97,21 @@ go install github.com/mwdomino/tether/cmd/tether@latest
 ```
 
 Requires Go 1.26+.
+
+### macOS status app (GUI)
+
+On the Mac, install the menubar app via the cask:
+
+```sh
+brew install --cask mwdomino/tap/tether
+```
+
+This installs `Tether.app` to `/Applications`, pulls in the `tether` CLI as a
+dependency, and runs `tether install` so the host daemon starts at login. The
+app itself registers a login item on first launch, so both the daemon and the
+GUI come back after a reboot. The menubar icon shows aggregate status
+(green/amber/red/grey) with a dropdown of boxes and a window listing recent
+requests; toggle "Start at login" from the menu to opt out.
 
 ### Release archive
 
@@ -199,9 +214,12 @@ journalctl --user -u tether-host -f
 
 ## Roadmap
 
-A macOS menubar + window GUI is planned as a thin client over the daemon's
-control socket (the same data `tether status` shows): at-a-glance green/red
-status, alerts when a box drops, and a live view of the URLs sent.
+- The macOS status app is a thin client over the daemon's control socket
+  (`cmd/tether-gui`); install it with the cask above.
+- Not yet: a signed/notarized build (the cask app is currently unsigned — clear
+  Gatekeeper with `xattr -dr com.apple.quarantine /Applications/Tether.app` if
+  needed), a bundled app icon, and box add/remove from the window (the
+  `tether box` CLI covers it today).
 
 ## Building from source
 

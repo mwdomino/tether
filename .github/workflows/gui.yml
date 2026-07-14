@@ -1,0 +1,27 @@
+name: GUI (macOS)
+on:
+  push:
+    branches: [main, tether-updates]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-gui:
+    # Apple Silicon only. Add a macos-13 (amd64) matrix leg if you ever need an
+    # Intel build — those runners are just slower to allocate.
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+      - name: Build Tether.app
+        run: |
+          sh scripts/package-macos.sh dev dist
+          ditto -c -k --sequesterRsrc --keepParent dist/Tether.app dist/Tether.zip
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Tether-app-dev
+          path: dist/Tether.zip
+          if-no-files-found: error

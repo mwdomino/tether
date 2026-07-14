@@ -25,3 +25,41 @@ jobs:
           # grant repo:contents:write on the tap repo, and add as a repo
           # secret here named HOMEBREW_TAP_GITHUB_TOKEN.
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+
+  # Build the macOS GUI (.app), attach it to the release, and update the
+  # Homebrew cask. Runs after goreleaser so the release and CLI formula exist.
+  gui-release:
+    needs: goreleaser
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+      - name: Build and zip Tether.app
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          sh scripts/package-macos.sh "$VERSION" dist
+          ditto -c -k --sequesterRsrc --keepParent dist/Tether.app "dist/Tether_${VERSION}_darwin_arm64.zip"
+      - name: Attach .app to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          gh release upload "$GITHUB_REF_NAME" "dist/Tether_${VERSION}_darwin_arm64.zip" --clobber
+      - name: Update Homebrew cask
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          SHA=$(shasum -a 256 "dist/Tether_${VERSION}_darwin_arm64.zip" | awk '{print $1}')
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/mwdomino/homebrew-tap.git" tap
+          mkdir -p tap/Casks
+          sed -e "s/@@VERSION@@/${VERSION}/g" -e "s/@@SHA@@/${SHA}/g" \
+            scripts/tether-cask.rb.tmpl > tap/Casks/tether.rb
+          cd tap
+          git config user.name "goreleaserbot"
+          git config user.email "bot@goreleaser.com"
+          git add Casks/tether.rb
+          git commit -m "cask: tether ${VERSION}"
+          git push
