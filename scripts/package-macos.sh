@@ -8,10 +8,26 @@ OUT="${2:-dist}"
 APP="$OUT/Tether.app"
 
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
-# The status icon is generated at runtime, so no Resources icon is required.
 go build -o "$APP/Contents/MacOS/Tether" ./cmd/tether-gui
+
+# App icon: build Tether.icns from the 1024px rope-knot PNG. Requires macOS
+# tools; skipped (with a warning) elsewhere so the script still runs on Linux.
+SRC="cmd/tether-gui/assets/appicon.png"
+if command -v sips >/dev/null 2>&1 && command -v iconutil >/dev/null 2>&1; then
+  ICONSET="$OUT/Tether.iconset"
+  rm -rf "$ICONSET"; mkdir -p "$ICONSET"
+  for s in 16 32 128 256 512; do
+    sips -z "$s" "$s" "$SRC" --out "$ICONSET/icon_${s}x${s}.png" >/dev/null
+    s2=$((s * 2))
+    sips -z "$s2" "$s2" "$SRC" --out "$ICONSET/icon_${s}x${s}@2x.png" >/dev/null
+  done
+  iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/Tether.icns"
+  rm -rf "$ICONSET"
+else
+  echo "warning: sips/iconutil not found; app icon not bundled" >&2
+fi
 
 # Bundle the CLI inside the app so the cask can symlink it onto PATH — the app
 # is then fully self-contained (no separate formula dependency). Note: the
@@ -32,6 +48,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <string>Tether</string>
     <key>CFBundleIdentifier</key>
     <string>io.github.mwdomino.tether</string>
+    <key>CFBundleIconFile</key>
+    <string>Tether</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleVersion</key>

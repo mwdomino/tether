@@ -5,7 +5,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"image/color"
 	"os"
 
 	"fyne.io/fyne/v2"
@@ -39,7 +38,7 @@ func main() {
 	})
 
 	a := fyneapp.NewWithID(appID)
-	a.SetIcon(iconFor(uistate.HealthDaemonDown))
+	a.SetIcon(appIcon())
 
 	w := a.NewWindow("Tether")
 	w.Resize(fyne.NewSize(560, 440))
@@ -153,7 +152,6 @@ func (ui *gui) update(v uistate.View) {
 	ui.reqs = reverse(v.Requests) // most recent first
 	ui.reqList.Refresh()
 
-	ui.app.SetIcon(iconFor(h))
 	ui.refreshTray()
 }
 
@@ -231,19 +229,25 @@ func glyph(state string) string {
 	}
 }
 
+// appIcon is the fixed app/window icon (the rope knot on a teal square).
+func appIcon() fyne.Resource {
+	return fyne.NewStaticResource("tether.png", appIconPNG)
+}
+
+// iconFor returns the status-tinted rope knot for the menubar.
 func iconFor(h uistate.Health) fyne.Resource {
-	var c color.Color
+	var png []byte
 	switch h {
 	case uistate.HealthOK:
-		c = color.RGBA{0x3c, 0xb3, 0x71, 0xff} // green
+		png = trayGreenPNG
 	case uistate.HealthDegraded:
-		c = color.RGBA{0xe6, 0xa0, 0x23, 0xff} // amber
+		png = trayAmberPNG
 	case uistate.HealthDown:
-		c = color.RGBA{0xd0, 0x3a, 0x3a, 0xff} // red
+		png = trayRedPNG
 	default:
-		c = color.RGBA{0x9e, 0x9e, 0x9e, 0xff} // grey (empty / daemon down)
+		png = trayGreyPNG // empty / daemon down
 	}
-	return fyne.NewStaticResource("tether-status.png", statusDotPNG(c))
+	return fyne.NewStaticResource("tether-status.png", png)
 }
 
 func reverse(in []registry.RequestRecord) []registry.RequestRecord {
