@@ -1,209 +1,142 @@
 # tether
 
-Open URLs from a headless machine in the browser on your GUI machine, over SSH.
-Tether is built for OAuth/SSO flows like `aws sso login`, `gcloud auth login`,
-and `gh auth login` when those commands run on a remote server but need a local
-browser and a `localhost` callback.
+Tether opens a browser on your Mac for a command running on a remote Linux machine. It also relays `localhost` callbacks to the command. This is useful for logins such as `aws sso login`, `gcloud auth login`, and `gh auth login` over SSH.
 
-Unlike a hand-rolled `ssh -R` + `xdg-open`, tether **owns and supervises the SSH
-forward itself** — it reconnects after sleep or network changes, and shows you
-per-box status so a broken tunnel is visible instead of silent.
+The Mac runs a host daemon that keeps an SSH remote forward open to each configured machine. The remote machine runs the `tether` CLI as an agent. The daemon reconnects the forward after a connection drops and shows its state with `tether status`.
 
-Supported platforms: **macOS host + Linux agent**.
-
-## Vocabulary
-
-- **Host:** the GUI machine with your browser (a Mac). It runs `tether host`, a
-  long-lived per-user daemon that keeps an SSH remote-forward alive to each
-  configured box, opens the browser, and tracks status.
-- **Agent:** a headless machine, VM, or SSH target where your CLI commands run.
-  It invokes `tether open` through `$BROWSER`, `xdg-open`, or `tether run`.
-
-```text
-[ host: Mac, tether host daemon ]                 [ agent: headless SSH box ]
-
-  supervisor ── ssh -N -R 9999:box.sock box ─────▶ sshd listens 127.0.0.1:9999
-      │  keepalive · ExitOnForwardFailure                  ▲
-      │  auto-reconnect · per-box status                   │ tether open <url>
-  per-box unix socket ◀── tunneled callback ───────────────┘
-      │  (yamux relay; browser callbacks tunnel back to the CLI)
-      ▼
-  registry (status + recent requests) ──▶ `tether status`  ·  macOS menubar app
-```
-
-Because tether launches the `ssh` process, it reuses everything in your
-`~/.ssh/config` — host aliases, keys, `ProxyJump`/bastions. You no longer edit a
-`RemoteForward` line by hand or reconnect your interactive session.
-
-Requirement: key-based (non-interactive) SSH to each box. Tether runs ssh with
-`BatchMode=yes`, so it never hangs on a password prompt.
+Tether needs key-based SSH access from the Mac to the remote machine. It runs SSH with `BatchMode=yes`, so password prompts do not work. The documented setup is a macOS host and a Linux agent. The CLI host service also supports Linux. The status app is macOS-only.
 
 ## Quick start
 
-Install the `tether` binary on both machines.
+Install the `tether` CLI on both machines. See [Install](#install) for the available packages.
 
-### 1. On the host (Mac): install the daemon and add a box
+On the Mac, install the host service and add an SSH target:
 
 ```sh
-tether install                                   # per-user service, starts now
-tether box add my-agent --ssh-host my-agent      # my-agent is a ~/.ssh/config alias
-tether reload                                    # apply without restarting
-tether status                                    # ● my-agent  connected
+tether install
+tether box add my-agent --ssh-host my-agent
+tether reload
+tether status
 ```
 
-`--ssh-host` is any `ssh` destination that already works from your Mac — an alias
-from `~/.ssh/config` is ideal. Add `--remote-port N` if `9999` is taken on the
-box.
+Use an SSH destination that already works from the Mac. For example, `my-agent` can be an alias in `~/.ssh/config`. If port `9999` is in use on the agent, add `--remote-port N` to `tether box add`.
 
-### 2. On the agent: run an auth command
-
-For one-off use, no agent install is needed:
+On the agent, run a login command without installing a browser shim:
 
 ```sh
 tether run -- aws sso login
 ```
 
-For daily use, install the agent shim once:
+`tether run` sets `$BROWSER` for the command and provides a temporary `xdg-open` shim on Linux. The agent still needs the `tether` binary.
+
+For commands you run regularly, install a persistent shim on the agent:
 
 ```sh
 tether install-shim
 eval "$(tether source)"
-```
-
-Then run your normal command:
-
-```sh
 aws sso login
-gcloud auth login
-gh auth login
 ```
 
-On Linux agents, `install-shim` also installs an `xdg-open` shim in
-`~/.local/bin` when possible. Keep `~/.local/bin` before system paths so CLIs
-that ignore `$BROWSER` still use tether.
+Add `eval "$(tether source)"` to your shell startup file if you want it in new shells. On Linux, `install-shim` also adds an `xdg-open` shim to `~/.local/bin` unless that path already has a conflicting file. Keep that directory first in `$PATH` for commands that ignore `$BROWSER`.
 
 ## Install
 
-### Homebrew / Linuxbrew
+Install the CLI with Homebrew on macOS or Linux:
 
 ```sh
 brew install mwdomino/tap/tether
 ```
 
-### Go install
+Or build the CLI with Go 1.26.2 or newer:
 
 ```sh
 go install github.com/mwdomino/tether/cmd/tether@latest
 ```
 
-Requires Go 1.26+.
-
-### macOS status app (GUI)
-
-On the Mac, install the menubar app via the cask:
+For the macOS menu bar app, use the cask instead of the formula:
 
 ```sh
 brew install --cask mwdomino/tap/tether
 ```
 
-This installs `Tether.app` to `/Applications`, pulls in the `tether` CLI as a
-dependency, and runs `tether install` so the host daemon starts at login. The
-app itself registers a login item on first launch, so both the daemon and the
-GUI come back after a reboot. The menubar icon shows aggregate status
-(green/amber/red/grey) with a dropdown of boxes and a window listing recent
-requests; toggle "Start at login" from the menu to opt out.
+The cask includes the CLI and places `Tether.app` in `/Applications`. Its installer attempts to start the host service. If that step fails, run `tether install`. Launch the app once to enable its login item. You can turn off the app login item with `Start at login` in its menu. The app shows connection state and recent requests. The app release is for Apple Silicon. The CLI also has an Intel Mac build. The app release workflow signs and notarizes the bundle.
 
-### Release archive
+You can also download a CLI archive and `checksums.txt` from [GitHub Releases](https://github.com/mwdomino/tether/releases). Choose the archive for your OS and CPU. Compare its SHA-256 digest with `checksums.txt`. Put the extracted `tether` binary on your `$PATH`.
 
-Download a release from <https://github.com/mwdomino/tether/releases>, extract,
-and put `tether` on `PATH`:
+## How it works
 
-```sh
-curl -fsSL https://github.com/mwdomino/tether/releases/latest/download/tether_<VERSION>_linux_amd64.tar.gz | \
-    tar -xz tether
-sudo install -m 0755 tether /usr/local/bin/tether
+```text
+Mac (host)                                      Remote machine (agent)
+
+tether host ── SSH remote forward ────────────▶ 127.0.0.1:9999
+   │                                                  ▲
+   │ opens the URL in a local browser                  │ tether open <url>
+   └── browser localhost callback ── tunnel ──────────┘
 ```
+
+Tether starts a separate SSH process for each box. SSH uses your existing `~/.ssh/config`, including keys and jump hosts. You do not need to add a `RemoteForward` entry or keep an interactive SSH session open.
+
+For a URL that contains an explicit `localhost`, `127.0.0.1`, or `[::1]` port, tether binds that port on the Mac and sends browser connections back to the agent. If the port is already in use on the Mac, the request fails. Tether waits up to five minutes for the callback by default.
+
+Some commands wait for `$BROWSER` to exit before they start their callback server. The shim starts `tether open` in the background and returns immediately. The background process stays alive for the callback or until its timeout.
 
 ## Commands
 
-### Host side
-
-| Command | What |
-|---|---|
-| `tether install` | Install and start the host daemon as a per-user service (systemd user unit on Linux, launchd LaunchAgent on macOS). |
-| `tether host` | Run the daemon in the foreground (what the service runs). |
-| `tether box add <name> --ssh-host <alias> [--remote-port N]` | Add a box to the config. |
-| `tether box list` | List configured boxes. |
-| `tether box rm <name>` | Remove a box. |
-| `tether reload` | Tell the running daemon to re-read its config and reconcile boxes. |
-| `tether status [--watch]` | Show each box's connection status and recent open requests. |
-| `tether uninstall` | Stop and remove the service. |
-
-### Agent side
-
-| Command | What |
-|---|---|
-| `tether run -- <cmd>` | Run `<cmd>` with an ephemeral browser shim; no install needed. |
-| `tether open <url>` | Send a URL to the host to open (used by the shims). |
-| `tether install-shim` | Install the persistent `tether-open` / `xdg-open` shim. |
-| `tether source` | Print shell exports (`$PATH`, `$BROWSER`) for the shim. |
+| Command | Where | Purpose |
+|---|---|---|
+| `tether install` | Host | Install and start the per-user service. |
+| `tether host` | Host | Run the daemon in the foreground. |
+| `tether box add <name> --ssh-host <alias> [--remote-port N]` | Host | Add an SSH target. |
+| `tether box list` / `tether box rm <name>` | Host | List or remove targets. |
+| `tether reload` | Host | Apply changes to the box configuration. |
+| `tether status [--watch]` | Host | Show connections and recent requests. |
+| `tether uninstall` | Host | Stop and remove the service. |
+| `tether run -- <cmd>` | Agent | Run a command with a temporary browser shim. |
+| `tether open <url>` | Agent | Send one URL to the host. |
+| `tether install-shim` | Agent | Install `tether-open` and, on Linux, `xdg-open`. |
+| `tether source` | Agent | Print shell exports for `$PATH` and `$BROWSER`. |
 
 ## Configuration
 
-The daemon reads `~/.config/tether/config.json` (or `$XDG_CONFIG_HOME/tether/`).
-It is normally managed with `tether box …`, but is plain JSON:
+`tether box add` writes `~/.config/tether/config.json` on the host. If `$XDG_CONFIG_HOME` is set, tether uses `$XDG_CONFIG_HOME/tether/config.json` instead. You can edit the file directly:
 
 ```json
 {
   "boxes": [
     { "name": "my-agent", "ssh_host": "my-agent", "remote_port": 9999 }
-  ],
-  "auth_token": ""
+  ]
 }
 ```
 
-- `ssh_host` — any `ssh` destination (typically a `~/.ssh/config` alias).
-- `remote_port` — the loopback port bound on the box (the port `tether open`
-  dials). Defaults to `9999`.
-- `auth_token` — optional shared secret; set the same value on the agent via
-  `TETHER_AUTH_TOKEN`.
+Run `tether reload` after a change. `remote_port` defaults to `9999` when you use `tether box add`. An optional `auth_token` field requires the same token on the agent via `TETHER_AUTH_TOKEN` or `--auth-token`. Protect the configuration file if you add a token.
 
-### Agent flags and environment
+The agent accepts these connection options for `tether open` and `tether run`:
 
-| Flag | Env | Default | What |
-|---|---|---|---|
-| `--server` | `TETHER_SERVER` | `127.0.0.1:9999` | Host port exposed on the box by the forward |
-| `--auth-token` | `TETHER_AUTH_TOKEN` | unset | Shared secret if the host requires one |
-| `--timeout` | `TETHER_TIMEOUT` | `5m` | Overall wait time for the callback |
+| Flag | Environment variable | Default |
+|---|---|---|
+| `--server` | `TETHER_SERVER` | `127.0.0.1:9999` |
+| `--socket` | `TETHER_SOCKET` | Unset (overrides `--server`) |
+| `--auth-token` | `TETHER_AUTH_TOKEN` | Unset |
+| `--timeout` | `TETHER_TIMEOUT` | `5m` |
 
-## Why the shim backgrounds `tether open`
+The forwarded port listens on the remote machine. Tether does not require a token by default. On a shared remote machine, other local users can reach that port. Set an `auth_token` on the host and agent if those users must not send browser requests. Tether records requested URLs in host logs and recent request history. OAuth URLs can contain sensitive query values. Do not share these logs or screenshots without reviewing them.
 
-Some CLIs wait for `$BROWSER` to exit before they start their local HTTP callback
-server. If `$BROWSER` were `tether open` directly, the CLI could block while
-tether waits for a callback the CLI has not started serving yet. The shim runs
-`tether open` in the background and returns `0` immediately; the background
-process keeps the tunnel alive, relays the callback, and exits when done or
-after `--timeout`.
+## Troubleshooting
 
-## Debugging
-
-The fastest check is on the host:
+If a login does not open a browser, start on the host:
 
 ```sh
-tether status          # is the box connected? any recent requests?
-tether status --watch  # stream status changes and requests live
+tether status
+tether status --watch
 ```
 
-A box shown `disconnected` prints the ssh error (e.g. host key, auth, or
-unreachable). Fix it and the supervisor reconnects automatically.
-
-Agent-side logs (recommended shim) are at `~/.cache/tether/open.log`:
+If the box is disconnected, read the SSH error in the status output. If the box is connected but the login fails, inspect the shim log on the agent:
 
 ```sh
 tail -f ~/.cache/tether/open.log
 ```
 
-Host daemon logs are captured by the service manager:
+Read host service logs with the service manager:
 
 ```sh
 # macOS
@@ -212,16 +145,11 @@ log stream --predicate 'process == "tether"' --info
 journalctl --user -u tether-host -f
 ```
 
-## Roadmap
+If `xdg-open` does not invoke tether, run `command -v xdg-open` on the agent. It must resolve to the shim directory for commands that do not use `$BROWSER`.
 
-- The macOS status app is a thin client over the daemon's control socket
-  (`cmd/tether-gui`); install it with the cask above.
-- Not yet: a signed/notarized build (the cask app is currently unsigned — clear
-  Gatekeeper with `xattr -dr com.apple.quarantine /Applications/Tether.app` if
-  needed), a bundled app icon, and box add/remove from the window (the
-  `tether box` CLI covers it today).
+If you installed the service or shim before this release, run `tether install` on the host and `tether install-shim` on the agent once. New installs prefer a matching `tether` entry on `$PATH`. Homebrew's link stays at the same path across upgrades. If you run the binary without a stable entry on `$PATH`, reinstall the service and shim after an upgrade.
 
-## Building from source
+## Build from source
 
 ```sh
 git clone https://github.com/mwdomino/tether
@@ -230,10 +158,8 @@ go build -o tether ./cmd/tether
 go test ./...
 ```
 
-Releases are cut by tagging `v*`; goreleaser produces archives for
-`linux/{amd64,arm64}` and `darwin/{amd64,arm64}` and publishes the Homebrew
-formula to `mwdomino/homebrew-tap`.
+The macOS app also needs the macOS build tools and GUI dependencies. `scripts/package-macos.sh` builds its app bundle. See [design notes](docs/README.md) for the historical specifications. They are not setup instructions.
 
 ## License
 
-[Add a LICENSE file. Until then: all rights reserved.]
+[MIT](LICENSE).

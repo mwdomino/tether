@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 
@@ -59,5 +60,27 @@ func currentExecutable() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return abs, nil
+	return stableExecutablePath(abs), nil
+}
+
+// Prefer a PATH entry that points to this exact binary. Package managers can
+// replace that entry on upgrade, while a resolved versioned path goes stale.
+func stableExecutablePath(exe string) string {
+	candidate, err := exec.LookPath("tether")
+	if err != nil {
+		return exe
+	}
+	running, err := os.Stat(exe)
+	if err != nil {
+		return exe
+	}
+	target, err := os.Stat(candidate)
+	if err != nil || !os.SameFile(running, target) {
+		return exe
+	}
+	abs, err := filepath.Abs(candidate)
+	if err != nil {
+		return exe
+	}
+	return abs
 }
