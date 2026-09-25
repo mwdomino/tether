@@ -12,8 +12,8 @@ cask "tether" do
   # app is self-contained (no separate formula needed).
   binary "#{appdir}/Tether.app/Contents/MacOS/tether-cli", target: "tether"
 
-  # Best-effort daemon autostart. must_succeed:false so a Gatekeeper kill on an
-  # unnotarized build cannot abort the whole install.
+  # Start the host service after install. Keep the cask installed if this fails;
+  # the user can retry with `tether install`.
   postflight do
     cli = "#{appdir}/Tether.app/Contents/MacOS/tether-cli"
     system_command cli, args: ["install"], must_succeed: false if File.exist?(cli)

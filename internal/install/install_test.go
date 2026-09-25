@@ -1,8 +1,10 @@
 package install
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -51,6 +53,46 @@ func TestRenderDarwinUnitEscapesXMLArguments(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("darwin plist missing escaped substring %q in:\n%s", want, got)
 		}
+	}
+}
+
+func TestEnableLinuxRestartsOnReinstall(t *testing.T) {
+	var calls [][]string
+	invoke := func(name string, args ...string) error {
+		calls = append(calls, append([]string{name}, args...))
+		return nil
+	}
+	if err := enableFor("linux", "1000", "/unused", invoke); err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{
+		{"systemctl", "--user", "daemon-reload"},
+		{"systemctl", "--user", "enable", "tether-host.service"},
+		{"systemctl", "--user", "restart", "tether-host.service"},
+	}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls = %v, want %v", calls, want)
+	}
+}
+
+func TestEnableDarwinReplacesLoadedAgent(t *testing.T) {
+	var calls [][]string
+	invoke := func(name string, args ...string) error {
+		calls = append(calls, append([]string{name}, args...))
+		if len(args) > 0 && args[0] == "bootout" {
+			return errors.New("not loaded")
+		}
+		return nil
+	}
+	if err := enableFor("darwin", "501", "/tmp/tether.plist", invoke); err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{
+		{"launchctl", "bootout", "gui/501/com.tether.host"},
+		{"launchctl", "bootstrap", "gui/501", "/tmp/tether.plist"},
+	}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls = %v, want %v", calls, want)
 	}
 }
 

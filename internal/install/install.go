@@ -151,21 +151,37 @@ func xmlEscape(s string) string {
 }
 
 func enable(unitPath string) error {
-	switch runtime.GOOS {
+	invoke := func(name string, args ...string) error {
+		if name == "launchctl" && len(args) > 0 && args[0] == "bootout" {
+			return exec.Command(name, args...).Run() // no service on first install
+		}
+		return run(name, args...)
+	}
+	return enableFor(runtime.GOOS, strconv.Itoa(os.Getuid()), unitPath, invoke)
+}
+
+func enableFor(goos, uid, unitPath string, invoke func(string, ...string) error) error {
+	switch goos {
 	case "linux":
-		if err := run("systemctl", "--user", "daemon-reload"); err != nil {
+		if err := invoke("systemctl", "--user", "daemon-reload"); err != nil {
 			return err
 		}
-		return run("systemctl", "--user", "enable", "--now", "tether-host.service")
+		if err := invoke("systemctl", "--user", "enable", "tether-host.service"); err != nil {
+			return err
+		}
+		// Restart an existing daemon so it uses the updated executable path.
+		return invoke("systemctl", "--user", "restart", "tether-host.service")
 	case "darwin":
-		uid := strconv.Itoa(os.Getuid())
+		// Replace a loaded agent as well as its plist. An initial install has
+		// nothing to boot out; launchctl reports an error in that case.
+		_ = invoke("launchctl", "bootout", "gui/"+uid+"/com.tether.host")
 		// Prefer modern bootstrap; fall back to legacy load -w.
-		if err := run("launchctl", "bootstrap", "gui/"+uid, unitPath); err != nil {
-			return run("launchctl", "load", "-w", unitPath)
+		if err := invoke("launchctl", "bootstrap", "gui/"+uid, unitPath); err != nil {
+			return invoke("launchctl", "load", "-w", unitPath)
 		}
 		return nil
 	default:
-		return fmt.Errorf("install: unsupported OS %q", runtime.GOOS)
+		return fmt.Errorf("install: unsupported OS %q", goos)
 	}
 }
 
